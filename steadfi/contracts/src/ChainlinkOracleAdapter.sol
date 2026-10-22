@@ -128,13 +128,27 @@ contract ChainlinkOracleAdapter is IPriceOracle, SteadFiAccessControl {
     }
 
     // -------------------------------------------------------------------------
-    // IPriceOracle
+    // IPriceOracle — view-safe price read (used by LendingPool via staticcall)
     // -------------------------------------------------------------------------
 
     /// @notice Returns USD price for `asset` scaled to 1e18.
-    ///         Reverts if feed is stale, paused, or returns a non-positive answer.
-    function getPrice(address asset) external override returns (uint256 price) {
-        // USDC is always $1.00 on Arc — no feed needed.
+    ///         Pure view: reads lastPrice from storage (set by updatePrice()).
+    ///         Reverts if feed is paused, not set, or lastPrice is zero (not yet updated).
+    ///         LendingPool calls this via staticcall for health-factor checks.
+    function getPrice(address asset) external view override returns (uint256 price) {
+        if (asset == USDC) return PRICE_PRECISION;
+        FeedConfig storage cfg = feeds[asset];
+        require(cfg.feed != address(0), "CL: feed not set");
+        require(!cfg.paused, "CL: feed paused");
+        price = cfg.lastPrice;
+        require(price > 0, "CL: price not initialized, call updatePrice first");
+    }
+
+    /// @notice Keeper-callable price update. Fetches latest from Chainlink, runs
+    ///         staleness + deviation checks, writes lastPrice, and runs EURC depeg check.
+    ///         This is the ONLY function that writes state; getPrice() is view-only.
+    ///         Must be called by a keeper before any borrow/liquidate that needs a fresh price.
+    function updatePrice(address asset) external returns (uint256 price) {
         if (asset == USDC) return PRICE_PRECISION;
 
         price = _fetchAndValidate(asset);
@@ -149,7 +163,7 @@ contract ChainlinkOracleAdapter is IPriceOracle, SteadFiAccessControl {
     function isHealthy(address asset) external view override returns (bool) {
         if (asset == USDC) return true;
         FeedConfig storage cfg = feeds[asset];
-        if (cfg.feed == address(0) || cfg.paused) return false;
+        if (cfg.feed == address(0) || cfg.paused || cfg.lastPrice == 0) return false;
         try IChainlinkAggregator(cfg.feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256 updatedAt, uint80
         ) {

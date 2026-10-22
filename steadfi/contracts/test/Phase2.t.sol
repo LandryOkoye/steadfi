@@ -137,7 +137,7 @@ contract Phase2Test is Test {
         }));
 
         // Deploy BatchRouter (Permit2 = zero address for tests that don't use Permit2)
-        router = new BatchRouter(address(pool), address(0x9999)); // fake permit2
+        router = new BatchRouter(address(pool), address(0x9999), address(this)); // fake permit2
 
         // Mint tokens to users
         usdc.mint(alice,  500_000e6);
@@ -269,6 +269,8 @@ contract Phase2Test is Test {
         btcFeed.setAnswer(9_500_000_000_000); // $95,000 in 8 decimals
         adapter.setFeed(address(cirBTC), address(btcFeed), 3900, 2000);
 
+        // updatePrice fetches from feed and writes lastPrice; getPrice reads it
+        adapter.updatePrice(address(cirBTC));
         uint256 price = adapter.getPrice(address(cirBTC));
         assertEq(price, 95_000e18, "btc price scaled to 1e18");
     }
@@ -294,13 +296,13 @@ contract Phase2Test is Test {
         feed.setAnswer(9_500_000_000_000);
         adapter.setFeed(address(cirBTC), address(feed), 3900, 2000);
 
-        // Seed lastPrice with a valid call first
-        adapter.getPrice(address(cirBTC));
+        // Seed lastPrice via updatePrice (this is the mutating path)
+        adapter.updatePrice(address(cirBTC));
 
         // Now make the feed stale (updatedAt = now - 4000 > stalenessWindow 3900)
         feed.setStale();
         vm.expectRevert("CL: stale price");
-        adapter.getPrice(address(cirBTC));
+        adapter.updatePrice(address(cirBTC));
     }
 
     function test_chainlink_adapter_deviation_circuit_breaker() public {
@@ -311,13 +313,13 @@ contract Phase2Test is Test {
         feed.setAnswer(9_500_000_000_000); // $95,000
         adapter.setFeed(address(cirBTC), address(feed), 3900, 2000); // 20% max deviation
 
-        // First call seeds lastPrice
-        adapter.getPrice(address(cirBTC));
+        // First updatePrice seeds lastPrice
+        adapter.updatePrice(address(cirBTC));
 
-        // Price jumps 30% — should trip circuit breaker
+        // Price jumps 30% — should trip circuit breaker on next updatePrice
         feed.setAnswer(12_350_000_000_000); // $123,500 (+30%)
         vm.expectRevert("CL: price deviation too large");
-        adapter.getPrice(address(cirBTC));
+        adapter.updatePrice(address(cirBTC));
     }
 
     function test_chainlink_adapter_eurc_depeg_alert() public {
@@ -332,10 +334,10 @@ contract Phase2Test is Test {
         adapter.setFeed(address(eurc), address(eurcUsdFeed), 3900, 2000);
         adapter.setEurcDepegBps(100); // 1% threshold
 
-        // 4% deviation > 1% threshold — should emit DepegAlert
+        // 4% deviation > 1% threshold — updatePrice emits DepegAlert
         vm.expectEmit(true, false, false, false);
         emit ChainlinkOracleAdapter.DepegAlert(address(eurc), 0, 0, 0);
-        adapter.getPrice(address(eurc));
+        adapter.updatePrice(address(eurc));
     }
 
     // =========================================================================

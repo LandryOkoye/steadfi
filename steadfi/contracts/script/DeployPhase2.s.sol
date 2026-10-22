@@ -130,7 +130,7 @@ contract DeployPhase2 is Script {
         // -----------------------------------------------------------------------
         // 4. BatchRouter
         // -----------------------------------------------------------------------
-        BatchRouter router = new BatchRouter(address(pool), PERMIT2);
+        BatchRouter router = new BatchRouter(address(pool), PERMIT2, msg.sender);
         console.log("BatchRouter:", address(router));
 
         // -----------------------------------------------------------------------

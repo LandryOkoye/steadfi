@@ -4,25 +4,26 @@ pragma solidity ^0.8.28;
 import {ILendingPool} from "./interfaces/ILendingPool.sol";
 
 /// @title BatchRouter
-/// @notice One-click atomic flows built on top of LendingPool using Arc's
-///         Multicall3From pattern (msg.sender is preserved through CallFrom).
+/// @notice One-click atomic flows built on top of LendingPool.
+///
+///         SECURITY FIXES (audit Phase 4):
+///         - All pool actions now use OnBehalfOf variants so positions are always
+///           booked to the END USER (msg.sender), never to this router.
+///         - BatchRouter never holds funds between calls: tokens in, pool action,
+///           any leftovers immediately returned to sender in the same tx.
+///         - rescueTokens() allows an admin to recover tokens stranded by Permit2
+///           frontrun (permit consumed out-of-band before our call lands).
 ///
 ///         Arc-native features used:
 ///         - Permit2 allowance transfer (gasless approval before supply or repay).
-///         - Arc Memo contract (attached to repay leg of "repay+withdraw" flow).
+///         - Arc Memo contract (attached to repay leg of flows).
 ///
 ///         Flows:
 ///         1. supplyAndBorrow       — supply collateral then borrow in one tx.
 ///         2. repayAndWithdraw      — repay debt then withdraw collateral in one tx.
-///         3. repayAllAndClose      — repay full debt + withdraw all collateral (close position).
+///         3. repayAllAndClose      — repay full debt + withdraw all collateral.
 ///         4. permit2Supply         — Permit2 transferFrom then supply (gasless approval).
 ///         5. permit2Repay          — Permit2 transferFrom then repay (gasless approval + memo).
-///
-///         Security:
-///         - BatchRouter never holds funds between calls.
-///         - All calls are msg.sender-on-behalf-of; the pool enforces per-user accounting.
-///         - No flash loan surface; no state is written here.
-///         - Permit2 signature replay is prevented by Permit2's nonce.
 
 interface IERC20 {
     function approve(address spender, uint256 amount) external returns (bool);
@@ -63,9 +64,10 @@ contract BatchRouter {
 
     ILendingPool public immutable pool;
     IPermit2     public immutable permit2;
+    address      public immutable admin;
 
-    /// @notice Arc Memo contract (same address on both networks).
-    address public constant MEMO_CONTRACT = 0x5294E9927c3306DcBaDb03fe70b92e01cCede505;
+    /// @notice Arc Memo contract address (same on testnet and mainnet).
+    address public constant MEMO_CONTRACT = 0x5294E9927c3306DcBaDb03fe70b92e01cCede505; // arc-studio-allow-onchain-literal
 
     // -------------------------------------------------------------------------
     // Events
@@ -85,57 +87,57 @@ contract BatchRouter {
         address collateralAsset,
         uint256 withdrawAmount
     );
+    event TokensRescued(address indexed token, address indexed to, uint256 amount);
 
     // -------------------------------------------------------------------------
     // Constructor
     // -------------------------------------------------------------------------
 
-    constructor(address pool_, address permit2_) {
+    constructor(address pool_, address permit2_, address admin_) {
         require(pool_    != address(0), "BR: zero pool");
         require(permit2_ != address(0), "BR: zero permit2");
+        require(admin_   != address(0), "BR: zero admin");
         pool    = ILendingPool(pool_);
         permit2 = IPermit2(permit2_);
+        admin   = admin_;
     }
 
     // -------------------------------------------------------------------------
     // Flow 1: Supply collateral + Borrow in one transaction
     // -------------------------------------------------------------------------
 
-    /// @notice Atomically: pull collateral from caller → supply → borrow `borrowAmount`
-    ///         of `borrowAsset` to caller.
-    /// @dev    Caller must have approved `collateralAsset` to this router (or use permit2Supply).
+    /// @notice Atomically supply collateral and borrow in a single transaction.
+    ///         Positions are booked to msg.sender, never to this router.
+    ///         Caller must approve collateralAsset to this router (or use permit2Supply).
     function supplyAndBorrow(
         address collateralAsset,
         uint256 collateralAmount,
         address borrowAsset,
         uint256 borrowAmount
     ) external {
-        // 1. Pull collateral from caller
-        IERC20(collateralAsset).transferFrom(msg.sender, address(this), collateralAmount);
+        // 1. Pull collateral from caller into router (temporary custody, same tx)
+        require(
+            IERC20(collateralAsset).transferFrom(msg.sender, address(this), collateralAmount),
+            "BR: collateral pull failed"
+        );
 
-        // 2. Approve pool for collateral
-        IERC20(collateralAsset).approve(address(pool), collateralAmount);
+        // 2. Approve pool for exact collateral amount
+        require(
+            IERC20(collateralAsset).approve(address(pool), collateralAmount),
+            "BR: approve failed"
+        );
 
-        // 3. Supply collateral on behalf of caller
-        //    Because BatchRouter calls pool.supply directly, msg.sender in pool = this contract.
-        //    We use the pool's on-behalf variant if available; otherwise route via Multicall3From.
-        //    For simplicity here: router supplies on its own behalf, then transfers sTokens to user.
-        //    TODO Phase 3: replace with Multicall3From so pool.supply registers user directly.
-        pool.supply(collateralAsset, collateralAmount);
+        // 3. Supply on behalf of caller — sTokens minted to msg.sender, not router
+        pool.supplyOnBehalfOf(collateralAsset, collateralAmount, msg.sender);
 
-        // Transfer sTokens to user
-        address sTokenAddr = pool.getMarketConfig(collateralAsset).sToken;
-        uint256 sBal = IERC20(sTokenAddr).balanceOf(address(this));
-        if (sBal > 0) IERC20(sTokenAddr).transfer(msg.sender, sBal);
+        // 4. Borrow on behalf of caller — debt recorded to msg.sender; funds to router
+        pool.borrowOnBehalfOf(borrowAsset, borrowAmount, msg.sender);
 
-        // 4. Borrow on behalf of caller — pool.borrow checks msg.sender's collateral
-        //    For the full Multicall3From pattern, both calls go through that contract.
-        //    This direct call works for Phase 2 testnet demos.
-        pool.borrow(borrowAsset, borrowAmount);
-
-        // Transfer borrowed asset to caller
+        // 5. Forward borrowed tokens to caller
         uint256 borrowed = IERC20(borrowAsset).balanceOf(address(this));
-        if (borrowed > 0) IERC20(borrowAsset).transfer(msg.sender, borrowed);
+        if (borrowed > 0) {
+            require(IERC20(borrowAsset).transfer(msg.sender, borrowed), "BR: borrow transfer failed");
+        }
 
         emit BatchSupplyAndBorrow(msg.sender, collateralAsset, collateralAmount, borrowAsset, borrowAmount);
     }
@@ -144,8 +146,9 @@ contract BatchRouter {
     // Flow 2: Repay debt + Withdraw collateral in one transaction
     // -------------------------------------------------------------------------
 
-    /// @notice Atomically: pull debt token from caller → repay → withdraw collateral to caller.
-    /// @param memo  Optional repayment reference (invoice ID, loan ref) — attached via Arc Memo.
+    /// @notice Atomically repay debt and withdraw collateral.
+    ///         Positions are adjusted on msg.sender's account.
+    /// @param memo  Optional repayment reference — attached via Arc Memo contract.
     function repayAndWithdraw(
         address debtAsset,
         uint256 debtAmount,
@@ -154,16 +157,29 @@ contract BatchRouter {
         bytes calldata memo
     ) external {
         // 1. Pull debt asset from caller
-        IERC20(debtAsset).transferFrom(msg.sender, address(this), debtAmount);
-        IERC20(debtAsset).approve(address(pool), debtAmount);
+        require(
+            IERC20(debtAsset).transferFrom(msg.sender, address(this), debtAmount),
+            "BR: debt pull failed"
+        );
+        require(IERC20(debtAsset).approve(address(pool), debtAmount), "BR: approve failed");
 
-        // 2. Repay with optional memo
-        pool.repay(debtAsset, debtAmount, memo);
+        // 2. Repay on behalf of caller (pool's repayOnBehalfOf)
+        pool.repayOnBehalfOf(debtAsset, debtAmount, msg.sender, memo);
 
-        // 3. Withdraw collateral to caller
-        pool.withdraw(collateralAsset, collateralAmount);
+        // 3. Return leftover debt asset (pool may cap at outstanding)
+        uint256 leftover = IERC20(debtAsset).balanceOf(address(this));
+        if (leftover > 0) {
+            require(IERC20(debtAsset).transfer(msg.sender, leftover), "BR: leftover transfer failed");
+        }
+
+        // 4. Withdraw collateral on behalf of caller — funds go to caller
+        pool.withdrawOnBehalfOf(collateralAsset, collateralAmount, msg.sender);
+
+        // 5. Forward withdrawn collateral to caller
         uint256 collBal = IERC20(collateralAsset).balanceOf(address(this));
-        if (collBal > 0) IERC20(collateralAsset).transfer(msg.sender, collBal);
+        if (collBal > 0) {
+            require(IERC20(collateralAsset).transfer(msg.sender, collBal), "BR: coll transfer failed");
+        }
 
         emit BatchRepayAndWithdraw(msg.sender, debtAsset, debtAmount, collateralAsset, collateralAmount);
     }
@@ -172,8 +188,8 @@ contract BatchRouter {
     // Flow 3: Repay all + Close position
     // -------------------------------------------------------------------------
 
-    /// @notice Repay full debt and withdraw all collateral in one call.
-    ///         Caller must approve `debtAsset` to this contract for `maxDebtAmount` (use type(uint256).max).
+    /// @notice Repay full debt and withdraw all collateral (close position).
+    ///         Caller should pass type(uint256).max for maxDebtAmount.
     function repayAllAndClose(
         address debtAsset,
         uint256 maxDebtAmount,
@@ -181,23 +197,30 @@ contract BatchRouter {
         uint256 collateralAmount,
         bytes calldata memo
     ) external {
-        // Pull up to maxDebtAmount — pool.repay caps at outstanding debt
         uint256 outstanding = pool.getUserDebt(msg.sender, debtAsset);
         uint256 pullAmount  = outstanding < maxDebtAmount ? outstanding : maxDebtAmount;
 
-        IERC20(debtAsset).transferFrom(msg.sender, address(this), pullAmount);
-        IERC20(debtAsset).approve(address(pool), pullAmount);
+        require(
+            IERC20(debtAsset).transferFrom(msg.sender, address(this), pullAmount),
+            "BR: debt pull failed"
+        );
+        require(IERC20(debtAsset).approve(address(pool), pullAmount), "BR: approve failed");
 
-        pool.repay(debtAsset, pullAmount, memo);
+        pool.repayOnBehalfOf(debtAsset, pullAmount, msg.sender, memo);
 
-        // Withdraw all collateral
-        pool.withdraw(collateralAsset, collateralAmount);
+        // Withdraw all collateral for msg.sender
+        pool.withdrawOnBehalfOf(collateralAsset, collateralAmount, msg.sender);
+
         uint256 collBal = IERC20(collateralAsset).balanceOf(address(this));
-        if (collBal > 0) IERC20(collateralAsset).transfer(msg.sender, collBal);
+        if (collBal > 0) {
+            require(IERC20(collateralAsset).transfer(msg.sender, collBal), "BR: coll transfer failed");
+        }
 
         // Return any unused debt asset
         uint256 leftover = IERC20(debtAsset).balanceOf(address(this));
-        if (leftover > 0) IERC20(debtAsset).transfer(msg.sender, leftover);
+        if (leftover > 0) {
+            require(IERC20(debtAsset).transfer(msg.sender, leftover), "BR: leftover transfer failed");
+        }
 
         emit BatchRepayAndWithdraw(msg.sender, debtAsset, pullAmount, collateralAsset, collateralAmount);
     }
@@ -206,8 +229,9 @@ contract BatchRouter {
     // Flow 4: Permit2 supply (gasless approval)
     // -------------------------------------------------------------------------
 
-    /// @notice Use a Permit2 signature to transfer `amount` of `asset` then supply to pool.
+    /// @notice Use a Permit2 signature to transfer `amount` of `asset` then supply.
     ///         Eliminates a separate approve() transaction.
+    ///         Tokens land in the router; supply is immediately booked to msg.sender.
     function permit2Supply(
         address asset,
         uint256 amount,
@@ -215,7 +239,7 @@ contract BatchRouter {
         uint256 deadline,
         bytes calldata signature
     ) external {
-        // 1. Permit2 pulls token to this contract
+        // 1. Permit2 pulls token from signer to this router
         permit2.permitTransferFrom(
             IPermit2.PermitTransferFrom({
                 permitted: IPermit2.TokenPermissions({token: asset, amount: amount}),
@@ -227,22 +251,18 @@ contract BatchRouter {
             signature
         );
 
-        // 2. Supply to pool
-        IERC20(asset).approve(address(pool), amount);
-        pool.supply(asset, amount);
+        // 2. Supply on behalf of caller — sTokens go directly to msg.sender
+        require(IERC20(asset).approve(address(pool), amount), "BR: approve failed");
+        pool.supplyOnBehalfOf(asset, amount, msg.sender);
 
-        // 3. Transfer sTokens to user
-        address sTokenAddr = pool.getMarketConfig(asset).sToken;
-        uint256 sBal = IERC20(sTokenAddr).balanceOf(address(this));
-        if (sBal > 0) IERC20(sTokenAddr).transfer(msg.sender, sBal);
+        // No leftover: exact amount supplied.
     }
 
     // -------------------------------------------------------------------------
     // Flow 5: Permit2 repay (gasless approval + optional memo)
     // -------------------------------------------------------------------------
 
-    /// @notice Use a Permit2 signature to transfer `amount` then repay debt.
-    ///         Attaches `memo` to the repayment via Arc Memo contract.
+    /// @notice Use a Permit2 signature to transfer `amount` then repay caller's debt.
     function permit2Repay(
         address asset,
         uint256 amount,
@@ -251,7 +271,6 @@ contract BatchRouter {
         bytes calldata signature,
         bytes calldata memo
     ) external {
-        // 1. Permit2 pulls token
         permit2.permitTransferFrom(
             IPermit2.PermitTransferFrom({
                 permitted: IPermit2.TokenPermissions({token: asset, amount: amount}),
@@ -263,13 +282,14 @@ contract BatchRouter {
             signature
         );
 
-        // 2. Repay with memo
-        IERC20(asset).approve(address(pool), amount);
-        pool.repay(asset, amount, memo);
+        require(IERC20(asset).approve(address(pool), amount), "BR: approve failed");
+        pool.repayOnBehalfOf(asset, amount, msg.sender, memo);
 
-        // 3. Return unused (pool may have capped at outstanding)
+        // Return unused (pool caps at outstanding debt)
         uint256 leftover = IERC20(asset).balanceOf(address(this));
-        if (leftover > 0) IERC20(asset).transfer(msg.sender, leftover);
+        if (leftover > 0) {
+            require(IERC20(asset).transfer(msg.sender, leftover), "BR: leftover transfer failed");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -278,15 +298,29 @@ contract BatchRouter {
 
     /// @notice Estimate USD cost of a pool action at current base fee.
     ///         On Arc gas is paid in USDC (native, 18 decimals).
-    ///         gasUnits: estimated gas for the action (from off-chain simulation).
-    ///         Returns cost in 1e6 USDC units (matching ERC-20 USDC decimals).
+    ///         Returns cost in 1e6 USDC units (ERC-20 USDC decimals).
     function estimateGasCostUsdc(uint256 gasUnits) external view returns (uint256 costUsdc6) {
-        // basefee is in wei-equivalent USDC (18 decimals on Arc)
-        uint256 baseFee18 = block.basefee;
-        // add 10% buffer for priority fee
-        uint256 totalFee18 = baseFee18 * gasUnits * 110 / 100;
-        // convert 18-dec native to 6-dec ERC-20 USDC
-        costUsdc6 = totalFee18 / 1e12;
+        uint256 baseFee18  = block.basefee;
+        uint256 totalFee18 = baseFee18 * gasUnits * 110 / 100; // +10% priority buffer
+        costUsdc6 = totalFee18 / 1e12; // 18-dec native → 6-dec ERC-20
+    }
+
+    // -------------------------------------------------------------------------
+    // Admin: rescue tokens stranded by Permit2 frontrun (audit fix)
+    // -------------------------------------------------------------------------
+
+    /// @notice Rescue ERC-20 tokens stranded in the router.
+    ///         Only callable by admin (governance / multisig).
+    ///         Used when a Permit2 nonce was consumed out-of-band, leaving tokens
+    ///         inside the router with no pending flow to consume them.
+    /// @param token     ERC-20 token to rescue.
+    /// @param to        Recipient (should be the original signer).
+    /// @param amount    Amount to transfer.
+    function rescueTokens(address token, address to, uint256 amount) external {
+        require(msg.sender == admin, "BR: only admin");
+        require(to != address(0),   "BR: zero recipient");
+        require(IERC20(token).transfer(to, amount), "BR: rescue transfer failed");
+        emit TokensRescued(token, to, amount);
     }
 
     // -------------------------------------------------------------------------

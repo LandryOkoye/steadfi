@@ -85,6 +85,12 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         require(config.liqThreshold < PCT_PRECISION, "LP: liqThreshold >= 100%");
         require(config.reserveFactor < PCT_PRECISION, "LP: reserveFactor >= 100%");
         require(config.closeFactor > 0 && config.closeFactor <= PCT_PRECISION, "LP: bad closeFactor");
+        // Fix (audit: call-to-non-existent-address): verify dependencies are real contracts
+        require(asset.code.length > 0,               "LP: asset is not a contract");
+        require(config.sToken.code.length > 0,       "LP: sToken is not a contract");
+        require(config.debtToken.code.length > 0,    "LP: debtToken is not a contract");
+        require(config.interestModel.code.length > 0,"LP: interestModel is not a contract");
+        require(config.oracle.code.length > 0,       "LP: oracle is not a contract");
 
         MarketConfig memory cfg = config;
         cfg.active = true;
@@ -229,6 +235,21 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         override
         nonReentrant
     {
+        _supply(asset, amount, msg.sender);
+    }
+
+    /// @notice Supply on behalf of `onBehalfOf`. Used by BatchRouter.
+    ///         Caller has already pulled the tokens; sTokens minted to onBehalfOf.
+    function supplyOnBehalfOf(address asset, uint256 amount, address onBehalfOf)
+        external
+        override
+        nonReentrant
+    {
+        require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _supply(asset, amount, onBehalfOf);
+    }
+
+    function _supply(address asset, uint256 amount, address recipient) internal {
         _requireNotPaused(asset);
         require(amount > 0, "LP: zero amount");
 
@@ -242,15 +263,16 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         );
         require(totalSupply_ + amount <= cfg.supplyCap, "LP: supply cap reached");
 
-        // Pull tokens from supplier
+        // Pull tokens from caller (msg.sender holds the tokens)
         _safeTransferIn(asset, msg.sender, amount);
 
-        // Mint sTokens
+        // Mint sTokens to recipient (may differ from msg.sender in OnBehalfOf case)
         uint256 amountRay = DecimalNormalizer.toRay(amount, cfg.decimals, false);
-        sToken(cfg.sToken).mint(msg.sender, amountRay, state.supplyIndex);
-        state.totalSupplyShares += amountRay.divRayDown(state.supplyIndex);
+        uint256 mintedShares = amountRay.divRayDown(state.supplyIndex);
+        sToken(cfg.sToken).mint(recipient, amountRay, state.supplyIndex);
+        state.totalSupplyShares += mintedShares;
 
-        emit Supply(msg.sender, asset, amount, amountRay.divRayDown(state.supplyIndex));
+        emit Supply(recipient, asset, amount, mintedShares);
     }
 
     // -------------------------------------------------------------------------
@@ -263,6 +285,21 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         override
         nonReentrant
     {
+        _withdraw(asset, amount, msg.sender, msg.sender);
+    }
+
+    /// @notice Withdraw on behalf of `onBehalfOf`. Burns their sTokens; sends to caller.
+    ///         Used by BatchRouter — caller must have sToken allowance from onBehalfOf.
+    function withdrawOnBehalfOf(address asset, uint256 amount, address onBehalfOf)
+        external
+        override
+        nonReentrant
+    {
+        require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _withdraw(asset, amount, onBehalfOf, msg.sender);
+    }
+
+    function _withdraw(address asset, uint256 amount, address owner, address recipient) internal {
         _requireNotPaused(asset);
         require(amount > 0, "LP: zero amount");
 
@@ -271,7 +308,7 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         MarketState  storage state = _states[asset];
 
         uint256 amountRay     = DecimalNormalizer.toRay(amount, cfg.decimals, false);
-        uint256 burnedShares  = sToken(cfg.sToken).burn(msg.sender, amountRay, state.supplyIndex);
+        uint256 burnedShares  = sToken(cfg.sToken).burn(owner, amountRay, state.supplyIndex);
         state.totalSupplyShares -= burnedShares;
 
         // Liquidity check: ensure pool has enough cash
@@ -279,12 +316,12 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 totalSupRay  = state.totalSupplyShares.mulRayDown(state.supplyIndex);
         require(totalDebtRay <= totalSupRay, "LP: insufficient liquidity");
 
-        // Health check: user must remain healthy after withdrawal
-        uint256 hf = _healthFactor(msg.sender);
-        require(hf >= RAY || _totalDebtOf(msg.sender) == 0, "LP: would be undercollateralized");
+        // Health check: owner must remain healthy after withdrawal
+        uint256 hf = _healthFactor(owner);
+        require(hf >= RAY || _totalDebtOf(owner) == 0, "LP: would be undercollateralized");
 
-        _safeTransferOut(asset, msg.sender, amount);
-        emit Withdraw(msg.sender, asset, amount, burnedShares);
+        _safeTransferOut(asset, recipient, amount);
+        emit Withdraw(owner, asset, amount, burnedShares);
     }
 
     // -------------------------------------------------------------------------
@@ -297,6 +334,21 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         override
         nonReentrant
     {
+        _borrow(asset, amount, msg.sender, msg.sender);
+    }
+
+    /// @notice Borrow on behalf of `onBehalfOf`. Debt recorded to onBehalfOf;
+    ///         funds sent to caller. Health factor checked against onBehalfOf.
+    function borrowOnBehalfOf(address asset, uint256 amount, address onBehalfOf)
+        external
+        override
+        nonReentrant
+    {
+        require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _borrow(asset, amount, onBehalfOf, msg.sender);
+    }
+
+    function _borrow(address asset, uint256 amount, address debtor, address recipient) internal {
         _requireNotPaused(asset);
         require(amount > 0, "LP: zero amount");
         require(_configs[asset].borrowEnabled, "LP: borrow disabled for asset");
@@ -317,16 +369,16 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 amountRay    = DecimalNormalizer.toRay(amount, cfg.decimals, true);
         require(amountRay <= totalSupRay - totalDebtRay, "LP: insufficient liquidity");
 
-        // Mint debt shares
-        uint256 mintedShares = DebtToken(cfg.debtToken).mint(msg.sender, amountRay, state.borrowIndex);
+        // Mint debt shares to debtor
+        uint256 mintedShares = DebtToken(cfg.debtToken).mint(debtor, amountRay, state.borrowIndex);
         state.totalDebtShares += mintedShares;
 
-        // Health check post-borrow
-        uint256 hf = _healthFactor(msg.sender);
+        // Health check against debtor's collateral
+        uint256 hf = _healthFactor(debtor);
         require(hf >= RAY, "LP: undercollateralized after borrow");
 
-        _safeTransferOut(asset, msg.sender, amount);
-        emit Borrow(msg.sender, asset, amount, mintedShares);
+        _safeTransferOut(asset, recipient, amount);
+        emit Borrow(debtor, asset, amount, mintedShares);
     }
 
     // -------------------------------------------------------------------------
@@ -341,6 +393,21 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         override
         nonReentrant
     {
+        _repay(asset, amount, msg.sender, msg.sender, memo);
+    }
+
+    /// @notice Repay debt of `onBehalfOf`. Caller provides the funds.
+    ///         Used by BatchRouter to repay a user's debt from pre-pulled tokens.
+    function repayOnBehalfOf(address asset, uint256 amount, address onBehalfOf, bytes calldata memo)
+        external
+        override
+        nonReentrant
+    {
+        require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _repay(asset, amount, msg.sender, onBehalfOf, memo);
+    }
+
+    function _repay(address asset, uint256 amount, address payer, address debtor, bytes calldata memo) internal {
         _requireActiveMarket(asset);
         require(amount > 0, "LP: zero amount");
 
@@ -348,8 +415,8 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         MarketConfig storage cfg   = _configs[asset];
         MarketState  storage state = _states[asset];
 
-        // Cap repayment at outstanding debt
-        uint256 debtShares_     = DebtToken(cfg.debtToken).debtSharesOf(msg.sender);
+        // Cap repayment at outstanding debt of debtor
+        uint256 debtShares_     = DebtToken(cfg.debtToken).debtSharesOf(debtor);
         uint256 outstandingRay  = debtShares_.mulRayUp(state.borrowIndex);
         uint256 outstandingAmt  = DecimalNormalizer.fromRay(outstandingRay, cfg.decimals, true);
         if (amount > outstandingAmt) amount = outstandingAmt;
@@ -362,12 +429,12 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         }
 
         uint256 amountRay    = DecimalNormalizer.toRay(amount, cfg.decimals, false);
-        _safeTransferIn(asset, msg.sender, amount);
+        _safeTransferIn(asset, payer, amount);
 
-        uint256 burnedShares = DebtToken(cfg.debtToken).burn(msg.sender, amountRay, state.borrowIndex);
+        uint256 burnedShares = DebtToken(cfg.debtToken).burn(debtor, amountRay, state.borrowIndex);
         state.totalDebtShares -= burnedShares;
 
-        emit Repay(msg.sender, asset, amount, burnedShares, memo);
+        emit Repay(debtor, asset, amount, burnedShares, memo);
     }
 
     // -------------------------------------------------------------------------
@@ -599,7 +666,9 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     // -------------------------------------------------------------------------
 
     /// @dev Pull ERC-20 tokens from `from`. Reverts if blocklisted or insufficient.
+    ///      Audit fix: check token.code.length > 0 to prevent silent success on EOA calls.
     function _safeTransferIn(address token, address from, uint256 amount) internal {
+        require(token.code.length > 0, "LP: token is not a contract");
         (bool ok, bytes memory data) = token.call(
             abi.encodeWithSignature("transferFrom(address,address,uint256)", from, address(this), amount)
         );
@@ -607,7 +676,9 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     }
 
     /// @dev Push ERC-20 tokens to `to`. Reverts if blocklisted.
+    ///      Audit fix: check token.code.length > 0.
     function _safeTransferOut(address token, address to, uint256 amount) internal {
+        require(token.code.length > 0, "LP: token is not a contract");
         (bool ok, bytes memory data) = token.call(
             abi.encodeWithSignature("transfer(address,uint256)", to, amount)
         );
@@ -619,6 +690,7 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         internal
         returns (bool success)
     {
+        if (token.code.length == 0) return false;
         (bool ok, bytes memory data) = token.call(
             abi.encodeWithSignature("transfer(address,uint256)", to, amount)
         );

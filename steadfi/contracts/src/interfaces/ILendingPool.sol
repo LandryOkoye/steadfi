@@ -64,9 +64,18 @@ interface ILendingPool {
     // -------------------------------------------------------------------------
 
     function supply(address asset, uint256 amount) external;
+    /// @notice Supply on behalf of another address (used by BatchRouter).
+    ///         Caller must have pulled the tokens first. sTokens minted to `onBehalfOf`.
+    function supplyOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
     function withdraw(address asset, uint256 amount) external;
     function borrow(address asset, uint256 amount) external;
+    /// @notice Borrow on behalf of another address (used by BatchRouter).
+    ///         Health factor checked against `onBehalfOf`'s collateral. Funds sent to caller.
+    function borrowOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
     function repay(address asset, uint256 amount, bytes calldata memo) external;
+    /// @notice Repay debt of `onBehalfOf` (used by BatchRouter). Caller provides the funds.
+    function repayOnBehalfOf(address asset, uint256 amount, address onBehalfOf, bytes calldata memo) external;
+    function withdrawOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
     function liquidate(
         address borrower,
         address debtAsset,

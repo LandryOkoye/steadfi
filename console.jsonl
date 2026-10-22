@@ -20,3 +20,7 @@
 {"level":"error","message":"[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)","timestamp":1792678423645}
 {"level":"debug","message":"[vite] hot updated: /src/App.tsx","timestamp":1792678423646}
 {"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792678423647}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792679742112}
+{"level":"debug","message":"[vite] connected.","timestamp":1792679748394}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792680647532}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792680883359}

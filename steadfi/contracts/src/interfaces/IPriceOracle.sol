@@ -8,11 +8,13 @@ pragma solidity ^0.8.28;
 ///      staleness checks, deviation guards, and a circuit-breaker pause.
 interface IPriceOracle {
     /// @notice Returns the USD price of `asset`, scaled to 1e18.
-    /// @dev    Not view: Chainlink adapter writes lastPrice for the deviation circuit breaker.
-    ///         MockPriceOracle is view-compatible but the interface is non-view for correctness.
+    /// @dev    VIEW-only: reads the last committed price from storage.
+    ///         For Chainlink: call updatePrice() (keeper path) before relying on this for
+    ///         freshness. For MockPriceOracle: always current. LendingPool calls this via
+    ///         staticcall so all implementations MUST be view-compatible (no state writes).
     /// @param asset The ERC-20 token address.
     /// @return price USD price with 18 decimal precision.
-    function getPrice(address asset) external returns (uint256 price);
+    function getPrice(address asset) external view returns (uint256 price);
 
     /// @notice Returns true if the oracle for `asset` is healthy (not stale, not paused).
     function isHealthy(address asset) external view returns (bool);
