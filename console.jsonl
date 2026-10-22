@@ -1,0 +1,22 @@
+{"level":"debug","message":"[vite] connected.","timestamp":1792674412325}
+{"level":"debug","message":"[vite] connected.","timestamp":1792674552922}
+{"level":"debug","message":"[vite] connected.","timestamp":1792674601332}
+{"level":"debug","message":"[vite] connected.","timestamp":1792674621429}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675749426}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675775212}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792675868740}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675874939}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792675886343}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675891672}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792675909978}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675914922}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792675947584}
+{"level":"debug","message":"[vite] connected.","timestamp":1792675963329}
+{"level":"debug","message":"[vite] connected.","timestamp":1792676456942}
+{"level":"debug","message":"[vite] connected.","timestamp":1792676476391}
+{"level":"debug","message":"[vite] connected.","timestamp":1792676616835}
+{"level":"debug","message":"[vite] connected.","timestamp":1792677171832}
+{"level":"debug","message":"[vite] connected.","timestamp":1792677243234}
+{"level":"error","message":"[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)","timestamp":1792678423645}
+{"level":"debug","message":"[vite] hot updated: /src/App.tsx","timestamp":1792678423646}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792678423647}

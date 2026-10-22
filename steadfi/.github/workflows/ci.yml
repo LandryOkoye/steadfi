@@ -1,0 +1,96 @@
+name: SteadFi CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  contracts:
+    name: Contracts (Foundry)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Arc Foundry
+        run: |
+          curl -L https://raw.githubusercontent.com/circle-internet/arc-foundry/main/arcup/install \
+            | bash
+          echo "$HOME/.arc/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: arc-forge install
+
+      - name: Build
+        run: arc-forge build --sizes
+
+      - name: Run tests
+        run: arc-forge test --gas-report -vvv
+
+      - name: Coverage check (>= 95% on core)
+        run: |
+          arc-forge coverage --report summary 2>&1 | tee coverage.txt
+          # Fail if core contract coverage < 95
+          python3 -c "
+          import re, sys
+          txt = open('coverage.txt').read()
+          # Parse total line coverage from summary
+          m = re.search(r'Lines\s*\|\s*([\d.]+)%', txt)
+          if m and float(m.group(1)) < 95:
+              print(f'Coverage {m.group(1)}% < 95%')
+              sys.exit(1)
+          print('Coverage OK')
+          "
+
+      - name: Slither static analysis
+        uses: crytic/slither-action@v0.3.2
+        with:
+          target: contracts/src
+          fail-on: high
+          slither-args: "--exclude-informational"
+        continue-on-error: true  # warn but don't block in Phase 1
+
+  keeper:
+    name: Keeper (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: keeper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun run lint
+
+  indexer:
+    name: Indexer (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun run lint
+
+  web:
+    name: Web App (React + Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+      - run: bun install
+      - run: bun run check
+      - run: bun run build

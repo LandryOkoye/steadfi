@@ -1,0 +1,16 @@
+{
+  "name": "steadfi-keeper",
+  "version": "0.1.0",
+  "description": "SteadFi liquidation keeper bot",
+  "scripts": {
+    "start": "bun run src/keeper.ts",
+    "dev": "bun --watch run src/keeper.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/bun": "^1.1.0"
+  }
+}

@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── SteadFi Design Tokens (ui-ux-pro-max: DeFi fintech dark, variance 6, density 7) ── */
+:root {
+  --color-primary:          #F59E0B;
+  --color-on-primary:       #0F172A;
+  --color-secondary:        #FBBF24;
+  --color-on-secondary:     #0F172A;
+  --color-accent:           #8B5CF6;
+  --color-on-accent:        #000000;
+  --color-background:       #0F172A;
+  --color-foreground:       #F8FAFC;
+  --color-card:             #1E2538;
+  --color-card-hover:       #252d42;
+  --color-muted:            #272F42;
+  --color-muted-foreground: #94A3B8;
+  --color-border:           #334155;
+  --color-destructive:      #EF4444;
+  --color-success:          #22C55E;
+  --color-warning:          #F59E0B;
+  --color-ring:             #F59E0B;
+
+  /* Spacing (density 7 — standard-to-dense) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Typography */
+  --font-heading: 'Space Grotesk', system-ui, sans-serif;
+  --font-body:    'Inter', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-body);
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-background); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-muted-foreground); }
+
+/* Number values use mono font */
+.mono { font-family: var(--font-mono); }
+
+/* Health factor colour bands */
+.hf-safe    { color: var(--color-success); }
+.hf-warning { color: var(--color-warning); }
+.hf-danger  { color: var(--color-destructive); }
+
+/* Transitions */
+.transition-base { transition: all 200ms cubic-bezier(.4,0,.2,1); }
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "steadfi-indexer",
+  "version": "0.1.0",
+  "description": "SteadFi event indexer and REST API",
+  "scripts": {
+    "start": "bun run src/indexer.ts",
+    "dev": "bun --watch run src/indexer.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/bun": "^1.1.0"
+  }
+}
