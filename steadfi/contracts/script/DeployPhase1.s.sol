@@ -29,14 +29,16 @@ contract DeployPhase1 is Script {
     address constant WETH    = 0x2c4047028a72803939b6fb674D01bC059B5C4961;
 
     // -------------------------------------------------------------------------
-    // Pyth oracle (verified onchain 2026-10-22: code length 177 bytes on Arc Testnet)
+    // Pyth Pro (Lazer) verifier on Arc Testnet. Arc has no upgraded Pyth Core
+    // contract, and Hermes now serves PNAU accumulator updates that the legacy
+    // Pyth Core contract cannot consume.
     // -------------------------------------------------------------------------
-    address constant PYTH = 0x2880aB155794e7179c9eE2e38200202908C17B43;
+    address constant PYTH_PRO = 0xACeA761c27A909d4D3895128EBe6370FDE2dF481;
 
-    // Pyth stable price feed IDs (same on all EVM chains — pyth.network/developers/price-feed-ids)
-    bytes32 constant FEED_BTC_USD = 0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43;
-    bytes32 constant FEED_ETH_USD = 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
-    bytes32 constant FEED_EUR_USD = 0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b;
+    // Pyth Pro numeric feed IDs (pyth.network price feed IDs)
+    uint32 constant FEED_BTC_USD = 1;
+    uint32 constant FEED_ETH_USD = 2;
+    uint32 constant FEED_EUR_USD = 327;
 
     uint256 constant RAY = RayMath.RAY; // 1e27
 
@@ -82,14 +84,14 @@ contract DeployPhase1 is Script {
         // ------------------------------------------------------------------
         PythOracleAdapter oracle = new PythOracleAdapter(
             deployer,
-            PYTH,
-            EURC,
-            FEED_EUR_USD
+            PYTH_PRO
         );
-        // Register price feeds — max age 60s (keeper updates before each borrow/liquidate)
-        oracle.setFeed(CIR_BTC, FEED_BTC_USD, 60);
-        oracle.setFeed(WETH,    FEED_ETH_USD, 60);
-        oracle.setFeed(EURC,    FEED_EUR_USD, 60);
+        // Register Pyth Pro feeds. The keeper pushes fresh signed updates every
+        // ~15s; 300s keeps the market usable through a missed tick while still
+        // rejecting genuinely stale data.
+        oracle.setFeed(CIR_BTC, FEED_BTC_USD, 300);
+        oracle.setFeed(WETH,    FEED_ETH_USD, 300);
+        oracle.setFeed(EURC,    FEED_EUR_USD, 300);
         // USDC feed not needed — getPrice(USDC) returns hardcoded $1.00
         console.log("PythOracleAdapter: ", address(oracle));
 
@@ -225,7 +227,7 @@ contract DeployPhase1 is Script {
         console.log("\n=== Phase 1 Deployment Complete ===");
         console.log("Deployer:          ", deployer);
         console.log("Chain ID:          ", block.chainid);
-        console.log("\nOracle: Pyth live feeds (BTC/USD, ETH/USD, EUR/USD)");
+        console.log("\nOracle: Pyth Pro pull feeds (BTC/USD, ETH/USD, EUR/USD)");
         console.log("WETH testnet:      0x2c4047028a72803939b6fb674D01bC059B5C4961");
         console.log("cirBTC testnet:    0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF");
         console.log("\nCopy these addresses into deployments/testnet.json");
