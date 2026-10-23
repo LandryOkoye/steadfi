@@ -1,23 +1,93 @@
 /**
- * Bridge In — guided flow to bring USDC from another chain to Arc via CCTP.
- * Renders real CCTP testnet addresses and links. Does not simulate the bridge —
- * shows instructions and links to the Bridge Kit to handle the actual transfer.
+ * Bridge In — real CCTP transfer into Arc Testnet using Circle App Kit.
+ * The user signs a burn on the source chain and a mint on Arc from their wallet.
  */
 import { useState } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
-import { Info, ArrowSquareOut } from '@phosphor-icons/react'
-import { CCTP, CONTRACTS, EXPLORER_BASE } from '../lib/steadfi'
+import Button from '../components/ui/Button'
+import AmountInput from '../components/ui/AmountInput'
+import { toast } from 'sonner'
+import { useAccount } from 'wagmi'
+import type { EIP1193Provider } from 'viem'
+import { AppKit } from '@circle-fin/app-kit'
+import { createViemAdapterFromProvider } from '@circle-fin/adapter-viem-v2'
+import {
+  ArcTestnet, EthereumSepolia, BaseSepolia, ArbitrumSepolia, OptimismSepolia,
+} from '@circle-fin/app-kit/chains'
+import { ArrowSquareOut, CheckCircle, Info, WarningCircle } from '@phosphor-icons/react'
+import { CCTP, EXPLORER_BASE, txUrl } from '../lib/steadfi'
 
 const SOURCE_CHAINS = [
-  { id: 'eth-sepolia',  label: 'Ethereum Sepolia', domain: 0,  testnetFaucet: 'https://faucet.circle.com' },
-  { id: 'base-sepolia', label: 'Base Sepolia',     domain: 6,  testnetFaucet: 'https://faucet.circle.com' },
-  { id: 'arb-sepolia',  label: 'Arbitrum Sepolia', domain: 3,  testnetFaucet: 'https://faucet.circle.com' },
-  { id: 'op-sepolia',   label: 'OP Sepolia',       domain: 2,  testnetFaucet: 'https://faucet.circle.com' },
-]
+  { key: 'eth-sepolia', label: 'Ethereum Sepolia', chain: EthereumSepolia },
+  { key: 'base-sepolia', label: 'Base Sepolia', chain: BaseSepolia },
+  { key: 'arb-sepolia', label: 'Arbitrum Sepolia', chain: ArbitrumSepolia },
+  { key: 'op-sepolia', label: 'OP Sepolia', chain: OptimismSepolia },
+] as const
+
+type BridgeStepView = {
+  name: string
+  state: 'pending' | 'success' | 'error' | 'noop'
+  txHash?: string
+  explorerUrl?: string
+  errorMessage?: string
+}
 
 export default function Bridge() {
-  const [chainIdx, setChainIdx] = useState(0)
-  const chain = SOURCE_CHAINS[chainIdx]
+  const { connector, isConnected } = useAccount()
+  const [chainKey, setChainKey] = useState<string>(SOURCE_CHAINS[0].key)
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ state: string; steps: BridgeStepView[] } | null>(null)
+
+  const source = SOURCE_CHAINS.find(c => c.key === chainKey) ?? SOURCE_CHAINS[0]
+  const numAmount = parseFloat(amount) || 0
+
+  async function handleBridge() {
+    if (!numAmount || !connector) return
+    setBusy(true)
+    setResult(null)
+    try {
+      const provider = (await connector.getProvider()) as EIP1193Provider
+      const adapter = await createViemAdapterFromProvider({
+        provider,
+        capabilities: {
+          addressContext: 'user-controlled',
+          supportedChains: [
+            EthereumSepolia, BaseSepolia, ArbitrumSepolia, OptimismSepolia, ArcTestnet,
+          ],
+        },
+      })
+
+      const kit = new AppKit()
+      const res = await kit.bridge({
+        from: { adapter, chain: source.chain },
+        to: { adapter, chain: ArcTestnet },
+        amount,
+      })
+
+      const steps: BridgeStepView[] = res.steps.map(s => ({
+        name: s.name,
+        state: s.state,
+        ...(s.txHash ? { txHash: s.txHash } : {}),
+        ...(s.explorerUrl ? { explorerUrl: s.explorerUrl } : {}),
+        ...(s.errorMessage ? { errorMessage: s.errorMessage } : {}),
+      }))
+      setResult({ state: res.state, steps })
+
+      if (res.state === 'success') {
+        toast.success(`Bridged ${amount} USDC to Arc Testnet`)
+        setAmount('')
+      } else if (res.state === 'error') {
+        toast.error('Bridge failed', {
+          description: steps.find(s => s.state === 'error')?.errorMessage ?? 'See steps below.',
+        })
+      }
+    } catch (e: unknown) {
+      toast.error('Bridge failed', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="max-w-lg mx-auto space-y-5">
@@ -28,16 +98,15 @@ export default function Bridge() {
         </p>
       </div>
 
-      {/* Step 1 — select source */}
       <Card>
         <CardHeader><CardTitle>1. Select source chain</CardTitle></CardHeader>
         <div className="grid grid-cols-2 gap-2">
-          {SOURCE_CHAINS.map((c, i) => (
+          {SOURCE_CHAINS.map(c => (
             <button
-              key={c.id}
-              onClick={() => setChainIdx(i)}
+              key={c.key}
+              onClick={() => { setChainKey(c.key); setResult(null) }}
               className={`py-2.5 rounded-xl border text-sm font-medium transition-base cursor-pointer
-                ${chainIdx === i
+                ${chainKey === c.key
                   ? 'border-[var(--color-primary)] bg-[var(--color-muted)] text-[var(--color-primary)]'
                   : 'border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-primary)]'
                 }`}
@@ -48,83 +117,115 @@ export default function Bridge() {
         </div>
       </Card>
 
-      {/* Step 2 — CCTP contract info */}
       <Card>
-        <CardHeader><CardTitle>2. Burn USDC on {chain.label}</CardTitle></CardHeader>
-        <p className="text-sm text-[var(--color-muted-foreground)] mb-4">
-          Call <code className="text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">depositForBurn</code> on the{' '}
-          <strong>TokenMessengerV2</strong> contract on {chain.label}.
-          Set <code className="text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">destinationDomain = {CCTP.domain}</code> (Arc Testnet).
-        </p>
-        <div className="rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
-          <p className="text-[var(--color-muted-foreground)]">// Arc Testnet destination domain</p>
-          <p>destinationDomain = <span className="text-[var(--color-primary)]">{CCTP.domain}</span></p>
-          <p className="text-[var(--color-muted-foreground)] mt-2">// Recipient: your wallet on Arc Testnet</p>
-          <p>mintRecipient = <span className="text-[var(--color-accent)]">{'<your Arc address>'}</span></p>
+        <CardHeader><CardTitle>2. Bridge USDC</CardTitle></CardHeader>
+        <AmountInput
+          label={`Amount of USDC on ${source.label}`}
+          value={amount}
+          onChange={setAmount}
+          symbol="USDC"
+          usdEquiv={numAmount > 0 ? numAmount.toLocaleString('en-US', { minimumFractionDigits: 2 }) : undefined}
+          id="bridge-amount"
+        />
+
+        <div className="mt-4 rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono space-y-1">
+          <p><span className="text-[var(--color-muted-foreground)]">From:</span> {source.label}</p>
+          <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc Testnet (domain {CCTP.domain})</p>
+          <p className="break-all"><span className="text-[var(--color-muted-foreground)]">Mint recipient:</span> {isConnected ? 'your connected wallet' : 'connect wallet'}</p>
         </div>
-        <a
-          href="https://developers.circle.com/stablecoins/cctp-usdc-bridging"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline mt-3"
-        >
-          CCTP developer docs <ArrowSquareOut size={11} aria-hidden="true" />
-        </a>
+
+        <p className="text-xs text-[var(--color-muted-foreground)] mt-3">
+          Your wallet will ask you to switch to {source.label} for the burn, then to Arc Testnet for the mint.
+          Both transactions are signed by you.
+        </p>
+
+        {isConnected ? (
+          <Button
+            variant="primary"
+            className="w-full mt-5"
+            loading={busy}
+            disabled={!numAmount}
+            onClick={() => { void handleBridge() }}
+          >
+            {busy ? 'Bridging…' : `Bridge ${amount || 'USDC'}`}
+          </Button>
+        ) : (
+          <p className="mt-5 text-center text-sm text-[var(--color-muted-foreground)]">
+            Connect your wallet to bridge
+          </p>
+        )}
       </Card>
 
-      {/* Step 3 — Attest + Mint */}
+      {result && (
+        <Card>
+          <CardHeader><CardTitle>3. Transfer status</CardTitle></CardHeader>
+          <div className="space-y-2">
+            {result.steps.map((s, i) => (
+              <div key={`${s.name}-${i}`} className="flex items-start justify-between py-1.5 border-b border-[var(--color-border)] last:border-0">
+                <div className="flex items-start gap-2">
+                  {s.state === 'success' && <CheckCircle size={14} className="text-[var(--color-success)] mt-0.5" aria-hidden="true" />}
+                  {s.state === 'error' && <WarningCircle size={14} className="text-[var(--color-danger)] mt-0.5" aria-hidden="true" />}
+                  {(s.state === 'pending' || s.state === 'noop') && <Info size={14} className="text-[var(--color-muted-foreground)] mt-0.5" aria-hidden="true" />}
+                  <div>
+                    <p className="text-sm font-medium">{s.name}</p>
+                    <p className="text-xs text-[var(--color-muted-foreground)]">{s.state}</p>
+                    {s.errorMessage && <p className="text-xs text-[var(--color-danger)] mt-0.5">{s.errorMessage}</p>}
+                  </div>
+                </div>
+                {s.txHash && (
+                  <a
+                    href={s.explorerUrl ?? txUrl(s.txHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[var(--color-primary)] text-xs inline-flex items-center gap-1"
+                  >
+                    tx <ArrowSquareOut size={11} aria-hidden="true" />
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+          {result.state === 'success' && (
+            <p className="text-xs text-[var(--color-success)] mt-3">
+              USDC has arrived on Arc Testnet. Head to Supply to deposit it.
+            </p>
+          )}
+        </Card>
+      )}
+
       <Card>
-        <CardHeader><CardTitle>3. Receive USDC on Arc Testnet</CardTitle></CardHeader>
-        <p className="text-sm text-[var(--color-muted-foreground)] mb-4">
-          After the burn is confirmed, call <code className="text-xs bg-[var(--color-muted)] px-1.5 py-0.5 rounded">receiveMessage</code> on
-          the Arc Testnet <strong>MessageTransmitterV2</strong> with the Circle attestation.
-          USDC will appear in your wallet on Arc Testnet.
-        </p>
-        <div className="rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono overflow-x-auto">
-          <p className="text-[var(--color-muted-foreground)] mb-1">// Arc Testnet MessageTransmitterV2</p>
+        <CardHeader><CardTitle>CCTP contracts (Arc Testnet)</CardTitle></CardHeader>
+        <div className="rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
+          <p className="text-[var(--color-muted-foreground)]">// MessageTransmitterV2</p>
           <p className="break-all">{CCTP.MessageTransmitterV2}</p>
-          <p className="text-[var(--color-muted-foreground)] mt-2 mb-1">// Arc Testnet TokenMessengerV2</p>
+          <p className="text-[var(--color-muted-foreground)] mt-2">// TokenMessengerV2</p>
           <p className="break-all">{CCTP.TokenMessengerV2}</p>
         </div>
-        <a
-          href={`${EXPLORER_BASE}/address/${CCTP.MessageTransmitterV2}`}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline mt-3"
-        >
-          View MessageTransmitterV2 on explorer <ArrowSquareOut size={11} aria-hidden="true" />
-        </a>
-      </Card>
-
-      {/* Step 4 — Deposit into SteadFi */}
-      <Card>
-        <CardHeader>
-          <CardTitle>4. Deposit into SteadFi</CardTitle>
-        </CardHeader>
-        <p className="text-sm text-[var(--color-muted-foreground)] mb-4">
-          Once USDC arrives on Arc Testnet, head to the <strong>Supply</strong> page to earn interest.
-        </p>
-        <div className="rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono overflow-x-auto">
-          <p className="text-[var(--color-muted-foreground)] mb-1">// SteadFi LendingPool on Arc Testnet</p>
-          <p className="break-all">{CONTRACTS.LendingPool}</p>
+        <div className="flex flex-wrap gap-3 mt-3">
+          <a
+            href={`${EXPLORER_BASE}/address/${CCTP.MessageTransmitterV2}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline"
+          >
+            MessageTransmitter <ArrowSquareOut size={11} aria-hidden="true" />
+          </a>
+          <a
+            href="https://faucet.circle.com"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline"
+          >
+            Circle testnet faucet <ArrowSquareOut size={11} aria-hidden="true" />
+          </a>
         </div>
-        <a
-          href={`${EXPLORER_BASE}/address/${CONTRACTS.LendingPool}`}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline mt-3"
-        >
-          View LendingPool on explorer <ArrowSquareOut size={11} aria-hidden="true" />
-        </a>
       </Card>
 
-      {/* Info box */}
       <div className="flex gap-3 p-4 rounded-2xl bg-[var(--color-muted)] border border-[var(--color-border)]">
         <Info size={16} className="text-[var(--color-primary)] shrink-0 mt-0.5" aria-hidden="true" />
         <p className="text-xs text-[var(--color-muted-foreground)]">
-          CCTP cross-chain bridging is permissionless and non-custodial.
-          Circle Circle attestations are typically available within 2–5 minutes on testnet.
-          On Arc Testnet, USDC is the native gas token — you do not need ETH or any other token for gas.
+          CCTP bridging is permissionless and non-custodial. Attestations usually arrive within 2–5 minutes on testnet.
+          Arc Testnet uses USDC for gas, so you do not need any other token.
         </p>
       </div>
     </div>

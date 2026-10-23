@@ -14,8 +14,10 @@ const TOKEN_ICONS: Record<TokenSymbol, string> = {
 export default function Markets() {
   const markets = useMarketData()
 
-  const tvl = markets.reduce((acc, m) => acc + m.totalSupplyUsd, 0)
-  const totalBorrowed = markets.reduce((acc, m) => acc + m.totalBorrowUsd, 0)
+  const allPriced = markets.every(m => m.totalSupplyUsd !== null && m.totalBorrowUsd !== null)
+  const tvl = allPriced ? markets.reduce((acc, m) => acc + (m.totalSupplyUsd ?? 0), 0) : null
+  const totalBorrowed = allPriced ? markets.reduce((acc, m) => acc + (m.totalBorrowUsd ?? 0), 0) : null
+  const oracleLive = markets.filter(m => m.collateralEnabled).every(m => m.priceUsd !== null)
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -32,19 +34,23 @@ export default function Markets() {
         <Card className="py-4">
           <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Total Value Locked</p>
           <p className="text-xl font-bold mono text-[var(--color-foreground)] mt-1">
-            ${tvl > 0 ? tvl.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+            {tvl !== null && tvl > 0 ? `$${tvl.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'}
           </p>
         </Card>
         <Card className="py-4">
           <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Total Borrowed</p>
           <p className="text-xl font-bold mono text-[var(--color-foreground)] mt-1">
-            ${totalBorrowed > 0 ? totalBorrowed.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'}
+            {totalBorrowed !== null && totalBorrowed > 0 ? `$${totalBorrowed.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'}
           </p>
         </Card>
         <Card className="py-4">
           <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Oracle</p>
-          <p className="text-xl font-bold mono text-[var(--color-success)] mt-1">Pyth Live</p>
-          <p className="text-xs text-[var(--color-muted-foreground)] mt-0.5">Arc Testnet</p>
+          <p className={`text-xl font-bold mono mt-1 ${oracleLive ? 'text-[var(--color-success)]' : 'text-[var(--color-warning)]'}`}>
+            {oracleLive ? 'Pyth Live' : 'Feed Unavailable'}
+          </p>
+          <p className="text-xs text-[var(--color-muted-foreground)] mt-0.5">
+            {oracleLive ? 'BTC / ETH feeds current' : 'Stale or unreadable feed'}
+          </p>
         </Card>
         <Card className="py-4">
           <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Network</p>
@@ -119,6 +125,15 @@ export default function Markets() {
                       </div>
                     </>
                   )}
+
+                  <div className="flex justify-between py-2 border-b border-[var(--color-border)]">
+                    <span className="text-xs text-[var(--color-muted-foreground)]">Oracle price</span>
+                    <span className={`mono text-sm ${m.priceUsd === null ? 'text-[var(--color-warning)]' : ''}`}>
+                      {m.priceUsd === null
+                        ? 'Unavailable'
+                        : `$${m.priceUsd.toLocaleString('en-US', { maximumFractionDigits: m.priceUsd < 10 ? 4 : 2 })}`}
+                    </span>
+                  </div>
 
                   <div className="flex justify-between py-2">
                     <span className="text-xs text-[var(--color-muted-foreground)]">Token decimals</span>

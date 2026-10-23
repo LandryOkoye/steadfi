@@ -1,6 +1,6 @@
 /**
  * Borrow — borrow USDC or EURC against cirBTC/WETH collateral.
- * Live health factor preview. No mocks.
+ * Health factor, borrow power, prices and rates are all live on-chain reads.
  */
 import { useState } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
@@ -13,14 +13,12 @@ import { toast } from 'sonner'
 import { parseUnits } from 'viem'
 import { useAccount } from 'wagmi'
 import {
-  useUserPosition, useBorrow, useMarketData,
+  useUserPosition, useBorrow, useMarketData, useOraclePrices,
 } from '../hooks/useSteadFi'
-import { BORROW_TOKENS, COLLATERAL_TOKENS, TOKENS, TokenSymbol, txUrl } from '../lib/steadfi'
-
-// Rough price table for HF preview (oracle prices not directly readable as view from UI)
-const APPROX_PRICE: Record<TokenSymbol, number> = {
-  USDC: 1.00, EURC: 1.08, cirBTC: 85_000, WETH: 2_500,
-}
+import {
+  BORROW_TOKENS, COLLATERAL_TOKENS, TOKENS, TokenSymbol, formatToken, txUrl,
+  usdFromTokenAmount,
+} from '../lib/steadfi'
 
 export default function Borrow() {
   const { isConnected } = useAccount()
@@ -30,44 +28,44 @@ export default function Borrow() {
 
   const position = useUserPosition()
   const markets = useMarketData()
+  const { prices } = useOraclePrices()
   const market = markets.find(m => m.symbol === asset)
 
   const numAmount = parseFloat(amount) || 0
   const decimals = TOKENS[asset].decimals
   const amountBig = amount ? parseUnits(amount, decimals) : 0n
+  const price18 = prices[asset]
 
-  // Preview health factor: estimate using current positions + new borrow
-  // HF = (sum of collateral × liqThreshold) / (current debt USD + new borrow USD)
-  const previewHf = (() => {
-    if (!position.healthFactor) return null
-    if (!numAmount) return position.healthFactor
+  // Borrow power and current debt, both read from LendingPool (Ray USD).
+  const borrowPowerUsd = Number(position.borrowPowerRay) / 1e18
+  const currentDebtUsd = Number(position.totalDebtRay) / 1e18
+  const availableUsd = Math.max(borrowPowerUsd - currentDebtUsd, 0)
+  const availableAsset = price18 ? availableUsd / (Number(price18) / 1e18) : null
 
-    // current debt in USD (rough)
-    const debtUsd = BORROW_TOKENS.reduce((acc, sym) => {
-      const debtAmt = Number(position.debts[sym]) / (10 ** TOKENS[sym].decimals)
-      return acc + debtAmt * APPROX_PRICE[sym]
-    }, 0)
+  const newBorrowUsd = price18 ? usdFromTokenAmount(amountBig, decimals, price18) : 0
+  const exceedsBorrowPower = newBorrowUsd > availableUsd
+  const exceedsLiquidity = market?.liquidityUsd !== null && market?.liquidityUsd !== undefined
+    ? newBorrowUsd > market.liquidityUsd
+    : false
 
-    // collateral USD weighted by liqThreshold
-    const collUsd = COLLATERAL_TOKENS.reduce((acc, sym) => {
-      const supplyAmt = Number(position.supplies[sym]) / (10 ** TOKENS[sym].decimals)
-      const m = markets.find(x => x.symbol === sym)
-      return acc + supplyAmt * APPROX_PRICE[sym] * ((m?.liqThreshold ?? 78) / 100)
-    }, 0)
-
-    const newDebtUsd = debtUsd + numAmount * APPROX_PRICE[asset]
-    if (newDebtUsd <= 0) return null
-    return collUsd / newDebtUsd
-  })()
-
-  const belowSafe = previewHf !== null && previewHf < 1.2
+  // Preview HF from live oracle prices and on-chain liq thresholds.
+  const liqCollateralUsd = COLLATERAL_TOKENS.reduce((acc, sym) => {
+    const p = prices[sym]
+    if (!p) return acc
+    const m = markets.find(x => x.symbol === sym)
+    const usd = usdFromTokenAmount(position.supplies[sym], TOKENS[sym].decimals, p)
+    return acc + usd * ((m?.liqThreshold ?? 0) / 100)
+  }, 0)
+  const previewHf = numAmount > 0 && liqCollateralUsd > 0
+    ? liqCollateralUsd / (currentDebtUsd + newBorrowUsd)
+    : position.healthFactor
 
   const { borrow } = useBorrow()
 
   async function handleBorrow() {
     if (!numAmount || !amountBig) return
-    if (previewHf !== null && previewHf < 1.0) {
-      toast.error('This borrow would put your position below liquidation threshold.')
+    if (exceedsBorrowPower) {
+      toast.error('This borrow exceeds your available borrow power.')
       return
     }
     setBusy(true)
@@ -115,6 +113,44 @@ export default function Borrow() {
       </Card>
 
       <Card>
+        <CardHeader><CardTitle>Your collateral</CardTitle></CardHeader>
+        <div className="space-y-0">
+          {COLLATERAL_TOKENS.map(sym => {
+            const p = prices[sym]
+            const usd = p ? usdFromTokenAmount(position.supplies[sym], TOKENS[sym].decimals, p) : null
+            return (
+              <StatRow
+                key={sym}
+                label={sym}
+                value={
+                  <span className="mono">
+                    {formatToken(position.supplies[sym], TOKENS[sym].decimals)} {sym}
+                    {usd !== null && <span className="text-[var(--color-muted-foreground)]"> · ${usd.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>}
+                  </span>
+                }
+              />
+            )
+          })}
+          <StatRow
+            label="Borrow power"
+            value={<span className="mono text-[var(--color-accent)]">${borrowPowerUsd.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>}
+          />
+          <StatRow
+            label="Outstanding debt"
+            value={<span className="mono">${currentDebtUsd.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>}
+          />
+          <StatRow
+            label="Available to borrow"
+            value={
+              availableAsset === null
+                ? <span className="text-xs text-[var(--color-warning)]">Price unavailable</span>
+                : <span className="mono">${availableUsd.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>
+            }
+          />
+        </div>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle>Borrow asset</CardTitle></CardHeader>
         <p className="text-xs text-[var(--color-muted-foreground)] mb-3">
           Only USDC and EURC can be borrowed. Deposit cirBTC or WETH as collateral to unlock borrowing.
@@ -141,7 +177,9 @@ export default function Borrow() {
           value={amount}
           onChange={setAmount}
           symbol={asset}
-          usdEquiv={numAmount > 0 ? (numAmount * APPROX_PRICE[asset]).toLocaleString('en-US', { minimumFractionDigits: 2 }) : undefined}
+          usdEquiv={price18 && numAmount > 0
+            ? (numAmount * (Number(price18) / 1e18)).toLocaleString('en-US', { minimumFractionDigits: 2 })
+            : undefined}
           id="borrow-amount"
         />
 
@@ -151,20 +189,30 @@ export default function Borrow() {
             value={
               market?.loading
                 ? <span className="text-xs text-[var(--color-muted-foreground)]">loading…</span>
-                : <span className="text-[var(--color-warning)] mono">{(market?.borrowApr ?? 0).toFixed(2)}%</span>
+                : <span className="text-[var(--color-warning)] mono">{market?.borrowApr.toFixed(2)}%</span>
             }
           />
           <StatRow
             label="Available liquidity"
             value={
-              market
+              market?.liquidityUsd !== null && market?.liquidityUsd !== undefined
                 ? <span className="mono">${market.liquidityUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-                : '—'
+                : <span className="text-xs text-[var(--color-warning)]">Unavailable</span>
             }
           />
-          {belowSafe && (
+          {exceedsBorrowPower && (
+            <p className="text-xs text-[var(--color-danger)] font-medium mt-2">
+              Amount exceeds your available borrow power.
+            </p>
+          )}
+          {exceedsLiquidity && (
+            <p className="text-xs text-[var(--color-danger)] font-medium mt-2">
+              Amount exceeds available market liquidity.
+            </p>
+          )}
+          {!exceedsBorrowPower && previewHf !== null && position.healthFactor !== null && previewHf < 1.2 && (
             <p className="text-xs text-[var(--color-warning)] font-medium mt-2">
-              Warning: health factor below 1.2. Consider reducing the borrow amount.
+              Warning: health factor would drop below 1.2.
             </p>
           )}
         </div>
@@ -174,7 +222,7 @@ export default function Borrow() {
             variant="primary"
             className="w-full mt-5"
             loading={busy}
-            disabled={!numAmount || (previewHf !== null && previewHf < 1.0)}
+            disabled={!numAmount || exceedsBorrowPower || exceedsLiquidity || !price18}
             onClick={() => { void handleBorrow() }}
           >
             Borrow {asset}

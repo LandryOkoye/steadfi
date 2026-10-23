@@ -1,6 +1,6 @@
 /**
- * Withdraw — withdraw supplied assets with live HF preview.
- * Live supply reads from chain. No mocks.
+ * Withdraw — withdraw supplied assets with live HF / borrow-power checks.
+ * All values are live chain reads; no price table.
  */
 import { useState } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
@@ -13,15 +13,11 @@ import { toast } from 'sonner'
 import { parseUnits } from 'viem'
 import { useAccount } from 'wagmi'
 import {
-  useUserPosition, useWithdraw, useMarketData,
+  SYMBOLS, useUserPosition, useWithdraw, useMarketData, useOraclePrices,
 } from '../hooks/useSteadFi'
-import { TOKENS, TokenSymbol, formatToken, txUrl, COLLATERAL_TOKENS, BORROW_TOKENS } from '../lib/steadfi'
-
-const ALL_TOKENS: TokenSymbol[] = [...COLLATERAL_TOKENS, ...BORROW_TOKENS] as TokenSymbol[]
-
-const APPROX_PRICE: Record<TokenSymbol, number> = {
-  USDC: 1.00, EURC: 1.08, cirBTC: 85_000, WETH: 2_500,
-}
+import {
+  TOKENS, TokenSymbol, formatToken, txUrl, usdFromTokenAmount,
+} from '../lib/steadfi'
 
 export default function Withdraw() {
   const { isConnected } = useAccount()
@@ -31,46 +27,56 @@ export default function Withdraw() {
 
   const position = useUserPosition()
   const markets = useMarketData()
+  const { prices } = useOraclePrices()
 
-  const decimals = TOKENS[asset].decimals
+  const token = TOKENS[asset]
+  const decimals = token.decimals
   const supplyRaw = position.supplies[asset]
   const supplyFormatted = formatToken(supplyRaw, decimals)
   const market = markets.find(m => m.symbol === asset)
+  const price18 = prices[asset]
 
   const amountBig = amount ? parseUnits(amount, decimals) : 0n
   const numAmount = parseFloat(amount) || 0
+  const withdrawUsd = price18 ? usdFromTokenAmount(amountBig, decimals, price18) : 0
 
-  // Preview HF: reduce collateral USD by withdrawal amount (only for collateral assets)
+  const totalDebtUsd = Number(position.totalDebtRay) / 1e18
+  const borrowPowerUsd = Number(position.borrowPowerRay) / 1e18
+  const powerLost = token.collateralEnabled && market
+    ? withdrawUsd * (market.ltv / 100)
+    : 0
+  const exceedsBorrowPower = totalDebtUsd > 0 && (borrowPowerUsd - powerLost) < totalDebtUsd
+  const exceedsLiquidity = market?.liquidityUsd !== null && market?.liquidityUsd !== undefined
+    ? withdrawUsd > market.liquidityUsd
+    : false
+
+  // Preview HF using live prices and on-chain liq thresholds.
   const previewHf = (() => {
-    if (!position.healthFactor) return null
+    if (position.healthFactor === null) return null
     if (!numAmount) return position.healthFactor
-    if (!TOKENS[asset].collateralEnabled) return position.healthFactor
+    if (!token.collateralEnabled) return position.healthFactor
 
-    // current debt in USD
-    const debtUsd = BORROW_TOKENS.reduce((acc, sym) => {
-      const amt = Number(position.debts[sym]) / (10 ** TOKENS[sym].decimals)
-      return acc + amt * APPROX_PRICE[sym]
-    }, 0)
-
-    if (debtUsd === 0) return null
-
-    // weighted collateral after withdrawal
-    const collUsd = ALL_TOKENS.filter(s => TOKENS[s].collateralEnabled).reduce((acc, sym) => {
-      const existing = Number(position.supplies[sym]) / (10 ** TOKENS[sym].decimals)
-      const remove = sym === asset ? numAmount : 0
+    const liqCollateralUsd = SYMBOLS.reduce((acc, sym) => {
+      const p = prices[sym]
+      if (!p) return acc
+      const remaining = sym === asset
+        ? (supplyRaw > amountBig ? supplyRaw - amountBig : 0n)
+        : position.supplies[sym]
       const m = markets.find(x => x.symbol === sym)
-      return acc + Math.max(0, existing - remove) * APPROX_PRICE[sym] * ((m?.liqThreshold ?? 78) / 100)
+      const usd = usdFromTokenAmount(remaining, TOKENS[sym].decimals, p)
+      return acc + usd * ((m?.liqThreshold ?? 0) / 100)
     }, 0)
 
-    return collUsd / debtUsd
+    if (totalDebtUsd <= 0) return null
+    return liqCollateralUsd / totalDebtUsd
   })()
 
   const { withdraw } = useWithdraw()
 
   async function handleWithdraw() {
     if (!numAmount || !amountBig) return
-    if (previewHf !== null && previewHf < 1.0) {
-      toast.error('This withdrawal would put your position below liquidation threshold.')
+    if (exceedsBorrowPower || exceedsLiquidity) {
+      toast.error('This withdrawal would leave the position undercollateralized.')
       return
     }
     setBusy(true)
@@ -90,11 +96,10 @@ export default function Withdraw() {
     }
   }
 
-  // Only show assets user has supplied
-  const availableAssets = ALL_TOKENS.filter(sym => {
-    if (position.loading) return true
-    return position.supplies[sym] > 0n
-  })
+  // Only show assets the user has supplied.
+  const availableAssets = position.loading
+    ? SYMBOLS
+    : SYMBOLS.filter(sym => position.supplies[sym] > 0n)
 
   return (
     <div className="max-w-lg mx-auto space-y-5">
@@ -131,7 +136,7 @@ export default function Withdraw() {
         ) : (
           <>
             <div className="flex flex-wrap gap-2 mb-5">
-              {(availableAssets.length > 0 ? availableAssets : ALL_TOKENS).map(sym => (
+              {(availableAssets.length > 0 ? availableAssets : SYMBOLS).map(sym => (
                 <button
                   key={sym}
                   onClick={() => { setAsset(sym); setAmount('') }}
@@ -152,6 +157,9 @@ export default function Withdraw() {
               onChange={setAmount}
               max={supplyFormatted.replace(/,/g, '')}
               symbol={asset}
+              usdEquiv={price18 && withdrawUsd > 0
+                ? withdrawUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : undefined}
               id="withdraw-amount"
             />
 
@@ -166,13 +174,23 @@ export default function Withdraw() {
               />
               {market && (
                 <StatRow
-                  label={TOKENS[asset].collateralEnabled ? 'Collateral' : 'Supply APY'}
+                  label={token.collateralEnabled ? 'Collateral' : 'Supply APY'}
                   value={
-                    TOKENS[asset].collateralEnabled
+                    token.collateralEnabled
                       ? <span className="text-[var(--color-accent)] text-xs font-medium">LTV {market.ltv.toFixed(0)}% / Liq {market.liqThreshold.toFixed(0)}%</span>
                       : <span className="text-[var(--color-success)] mono">{market.supplyApy.toFixed(2)}%</span>
                   }
                 />
+              )}
+              {exceedsBorrowPower && (
+                <p className="text-xs text-[var(--color-danger)] font-medium mt-2">
+                  Withdrawing this amount would exceed your remaining borrow power.
+                </p>
+              )}
+              {exceedsLiquidity && (
+                <p className="text-xs text-[var(--color-danger)] font-medium mt-2">
+                  Amount exceeds available market liquidity.
+                </p>
               )}
             </div>
 
@@ -180,7 +198,7 @@ export default function Withdraw() {
               variant="primary"
               className="w-full mt-5"
               loading={busy}
-              disabled={!numAmount || supplyRaw === 0n || (previewHf !== null && previewHf < 1.0)}
+              disabled={!numAmount || supplyRaw === 0n || exceedsBorrowPower || exceedsLiquidity || !price18}
               onClick={() => { void handleWithdraw() }}
             >
               Withdraw {asset}
