@@ -6,9 +6,10 @@ import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight, ArrowSquareOut } from '@phosphor-icons/react'
 import { useAccount, usePublicClient } from 'wagmi'
-import { CONTRACTS, TOKENS, TokenSymbol, txUrl } from '../lib/steadfi'
-import { formatUnits } from 'viem'
-// EVENT_TOPICS unused — topic-based filtering replaced by typed viem getLogs
+import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI } from '../lib/steadfi'
+import { formatUnits, hexToBytes } from 'viem'
+
+const HISTORY_LOOKBACK = 100_000n
 
 type TxType = 'Supply' | 'Borrow' | 'Repay' | 'Withdraw'
 
@@ -56,68 +57,33 @@ export default function History() {
       if (!cancelled) setLoading(true)
       try {
         const blockNumber = await publicClient!.getBlockNumber()
-        const fromBlock = blockNumber > 5000n ? blockNumber - 5000n : 0n
+        const fromBlock = blockNumber > HISTORY_LOOKBACK ? blockNumber - HISTORY_LOOKBACK : 0n
 
-        // Fetch all event types in parallel
         const [supplyLogs, borrowLogs, repayLogs, withdrawLogs] = await Promise.all([
           publicClient!.getLogs({
             address: CONTRACTS.LendingPool,
-            // Supply(address user, address asset, uint256 amount)
-            event: {
-              name: 'Supply',
-              type: 'event',
-              inputs: [
-                { name: 'user', type: 'address', indexed: true },
-                { name: 'asset', type: 'address', indexed: true },
-                { name: 'amount', type: 'uint256', indexed: false },
-              ],
-            },
+            event: LENDING_POOL_EVENTS_ABI[0],
             args: { user: address },
             fromBlock,
             toBlock: blockNumber,
           }),
           publicClient!.getLogs({
             address: CONTRACTS.LendingPool,
-            event: {
-              name: 'Borrow',
-              type: 'event',
-              inputs: [
-                { name: 'user', type: 'address', indexed: true },
-                { name: 'asset', type: 'address', indexed: true },
-                { name: 'amount', type: 'uint256', indexed: false },
-              ],
-            },
+            event: LENDING_POOL_EVENTS_ABI[1],
             args: { user: address },
             fromBlock,
             toBlock: blockNumber,
           }),
           publicClient!.getLogs({
             address: CONTRACTS.LendingPool,
-            event: {
-              name: 'Repay',
-              type: 'event',
-              inputs: [
-                { name: 'user', type: 'address', indexed: true },
-                { name: 'asset', type: 'address', indexed: true },
-                { name: 'amount', type: 'uint256', indexed: false },
-                { name: 'memo', type: 'bytes', indexed: false },
-              ],
-            },
+            event: LENDING_POOL_EVENTS_ABI[2],
             args: { user: address },
             fromBlock,
             toBlock: blockNumber,
           }),
           publicClient!.getLogs({
             address: CONTRACTS.LendingPool,
-            event: {
-              name: 'Withdraw',
-              type: 'event',
-              inputs: [
-                { name: 'user', type: 'address', indexed: true },
-                { name: 'asset', type: 'address', indexed: true },
-                { name: 'amount', type: 'uint256', indexed: false },
-              ],
-            },
+            event: LENDING_POOL_EVENTS_ABI[3],
             args: { user: address },
             fromBlock,
             toBlock: blockNumber,
@@ -126,11 +92,23 @@ export default function History() {
 
         if (cancelled) return
 
-        type RawLog = { args?: { asset?: string; amount?: bigint; memo?: `0x${string}` }; transactionHash?: string; blockNumber?: bigint }
-        function parseLogs(logs: RawLog[], type: TxType): TxRecord[] {
-          return logs.map(log => {
+        type RawLog = {
+          args?: {
+            user?: string
+            asset?: string
+            amount?: bigint
+            memo?: `0x${string}`
+          }
+          transactionHash?: string
+          blockNumber?: bigint
+        }
+
+        function parseLogs(logs: readonly unknown[], type: TxType): TxRecord[] {
+          return (logs as RawLog[])
+            .filter(log => log.args?.user?.toLowerCase() === address!.toLowerCase())
+            .map(log => {
             const assetAddr = log.args?.asset?.toLowerCase() ?? ''
-            const assetSym = ASSET_BY_ADDRESS[assetAddr] ?? ('USDC')
+            const assetSym = ASSET_BY_ADDRESS[assetAddr] ?? 'USDC'
             const amount = log.args?.amount ?? 0n
             const decimals = TOKENS[assetSym]?.decimals ?? 6
             const memoBytes = type === 'Repay' ? log.args?.memo : null
@@ -138,9 +116,7 @@ export default function History() {
             let memoStr: string | null = null
             if (memoBytes && memoBytes !== '0x') {
               try {
-                memoStr = new TextDecoder().decode(
-                  Uint8Array.from(Buffer.from(memoBytes.slice(2), 'hex'))
-                )
+                memoStr = new TextDecoder().decode(hexToBytes(memoBytes))
                 if (!memoStr.trim()) memoStr = null
               } catch { memoStr = null }
             }
@@ -182,7 +158,7 @@ export default function History() {
       <div>
         <h1 className="text-2xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>History</h1>
         <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-          Your onchain transaction history — last 5,000 blocks. Repayment memos stored onchain.
+          Your onchain transaction history — last 100,000 blocks. Repayment memos stored onchain.
         </p>
       </div>
 
@@ -217,7 +193,7 @@ export default function History() {
             <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">Loading history…</p>
           ) : filtered.length === 0 ? (
             <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
-              No transactions found in the last 5,000 blocks.
+              No transactions found in the last 100,000 blocks.
             </p>
           ) : (
             <div className="divide-y divide-[var(--color-border)]">

@@ -1,23 +1,27 @@
 /**
  * Positions — live supply + borrow positions from LendingPool.
- * No mocks. Reads from chain.
+ * Valuations use on-chain oracle prices; missing/stale prices are shown as "—".
  */
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import StatRow from '../components/ui/StatRow'
 import HealthFactor from '../components/ui/HealthFactor'
 import { ArrowCircleDown, ArrowCircleUp, ShieldCheck, Warning } from '@phosphor-icons/react'
 import { useAccount } from 'wagmi'
-import { useUserPosition, useMarketData } from '../hooks/useSteadFi'
-import { TOKENS, TokenSymbol, formatToken, COLLATERAL_TOKENS, BORROW_TOKENS } from '../lib/steadfi'
+import { useUserPosition, useMarketData, useOraclePrices, SYMBOLS } from '../hooks/useSteadFi'
+import {
+  TOKENS, TokenSymbol, formatToken, usdFromTokenAmount,
+  COLLATERAL_TOKENS, BORROW_TOKENS,
+} from '../lib/steadfi'
 
-const APPROX_PRICE: Record<TokenSymbol, number> = {
-  USDC: 1.00, EURC: 1.08, cirBTC: 85_000, WETH: 2_500,
+function fmtUsd(v: number | null): string {
+  return v === null ? '—' : `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
 }
 
 export default function Positions() {
   const { address, isConnected } = useAccount()
   const position = useUserPosition()
   const markets = useMarketData()
+  const { prices } = useOraclePrices()
 
   if (!isConnected) {
     return (
@@ -43,41 +47,51 @@ export default function Positions() {
     )
   }
 
-  // Compute net position
-  const totalCollateralUsd = COLLATERAL_TOKENS.reduce((acc, sym) => {
-    const amt = Number(position.supplies[sym]) / (10 ** TOKENS[sym].decimals)
-    return acc + amt * APPROX_PRICE[sym]
-  }, 0)
+  const usdOf = (sym: TokenSymbol, amount: bigint): number | null => {
+    const p = prices[sym]
+    if (!p) return null
+    return usdFromTokenAmount(amount, TOKENS[sym].decimals, p)
+  }
 
-  const totalDebtUsd = BORROW_TOKENS.reduce((acc, sym) => {
-    const amt = Number(position.debts[sym]) / (10 ** TOKENS[sym].decimals)
-    return acc + amt * APPROX_PRICE[sym]
-  }, 0)
+  const sumUsd = (symbols: TokenSymbol[], getAmount: (s: TokenSymbol) => bigint): number | null => {
+    let total = 0
+    for (const sym of symbols) {
+      const amount = getAmount(sym)
+      if (amount === 0n) continue
+      const usd = usdOf(sym, amount)
+      if (usd === null) return null
+      total += usd
+    }
+    return total
+  }
 
-  const totalLendingUsd = BORROW_TOKENS.reduce((acc, sym) => {
-    const amt = Number(position.supplies[sym]) / (10 ** TOKENS[sym].decimals)
-    return acc + amt * APPROX_PRICE[sym]
-  }, 0)
+  const totalCollateralUsd = sumUsd(COLLATERAL_TOKENS, s => position.supplies[s])
+  const totalLendingUsd = sumUsd(BORROW_TOKENS, s => position.supplies[s])
+  const totalDebtUsd = sumUsd(BORROW_TOKENS, s => position.debts[s])
+  const totalSuppliedUsd = totalCollateralUsd !== null && totalLendingUsd !== null
+    ? totalCollateralUsd + totalLendingUsd
+    : null
+  const netUsd = totalSuppliedUsd !== null && totalDebtUsd !== null
+    ? totalSuppliedUsd - totalDebtUsd
+    : null
 
-  const netUsd = totalCollateralUsd + totalLendingUsd - totalDebtUsd
-
-  // Supply positions (all markets where user has supply)
-  const supplyPositions = (COLLATERAL_TOKENS).concat(BORROW_TOKENS)
+  const supplyPositions = SYMBOLS
     .map(sym => ({
       sym,
       balance: position.supplies[sym],
       decimals: TOKENS[sym].decimals,
-      usdValue: Number(position.supplies[sym]) / (10 ** TOKENS[sym].decimals) * APPROX_PRICE[sym],
+      usdValue: usdOf(sym, position.supplies[sym]),
       apy: markets.find(m => m.symbol === sym)?.supplyApy ?? 0,
+      isCollateral: TOKENS[sym].collateralEnabled,
     }))
     .filter(p => p.balance > 0n)
 
-  const borrowPositions = (BORROW_TOKENS)
+  const borrowPositions = BORROW_TOKENS
     .map(sym => ({
       sym,
       debt: position.debts[sym],
       decimals: TOKENS[sym].decimals,
-      usdValue: Number(position.debts[sym]) / (10 ** TOKENS[sym].decimals) * APPROX_PRICE[sym],
+      usdValue: usdOf(sym, position.debts[sym]),
       apr: markets.find(m => m.symbol === sym)?.borrowApr ?? 0,
     }))
     .filter(p => p.debt > 0n)
@@ -102,7 +116,6 @@ export default function Positions() {
         </Card>
       ) : (
         <>
-          {/* Summary row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="md:col-span-1">
               <CardHeader><CardTitle>Health Factor</CardTitle></CardHeader>
@@ -124,21 +137,20 @@ export default function Positions() {
             <Card>
               <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Total Supplied</p>
               <p className="text-3xl font-bold mono text-[var(--color-foreground)] mt-2">
-                ${(totalCollateralUsd + totalLendingUsd).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                {fmtUsd(totalSuppliedUsd)}
               </p>
               <p className="text-xs text-[var(--color-muted-foreground)] mt-1">Collateral + lending</p>
             </Card>
 
             <Card>
               <p className="text-xs text-[var(--color-muted-foreground)] font-medium">Net Position</p>
-              <p className={`text-3xl font-bold mono mt-2 ${netUsd >= 0 ? 'text-[var(--color-success)]' : 'text-[var(--color-warning)]'}`}>
-                ${netUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+              <p className={`text-3xl font-bold mono mt-2 ${netUsd === null ? '' : netUsd >= 0 ? 'text-[var(--color-success)]' : 'text-[var(--color-warning)]'}`}>
+                {fmtUsd(netUsd)}
               </p>
               <p className="text-xs text-[var(--color-muted-foreground)] mt-1">Collateral + lend − debt</p>
             </Card>
           </div>
 
-          {/* Supply positions */}
           {supplyPositions.length > 0 && (
             <Card>
               <CardHeader>
@@ -156,11 +168,15 @@ export default function Positions() {
                       <span className="mono">
                         {formatToken(p.balance, p.decimals)} {p.sym}
                         <span className="text-[var(--color-muted-foreground)] ml-2">
-                          (${p.usdValue.toLocaleString('en-US', { maximumFractionDigits: 0 })})
+                          ({fmtUsd(p.usdValue)})
                         </span>
-                        <span className="text-[var(--color-success)] ml-2 text-xs">
-                          {p.apy.toFixed(2)}% APY
-                        </span>
+                        {p.isCollateral ? (
+                          <span className="text-[var(--color-accent)] ml-2 text-xs">Collateral</span>
+                        ) : (
+                          <span className="text-[var(--color-success)] ml-2 text-xs">
+                            {p.apy.toFixed(2)}% APY
+                          </span>
+                        )}
                       </span>
                     }
                   />
@@ -169,7 +185,6 @@ export default function Positions() {
             </Card>
           )}
 
-          {/* Borrow positions */}
           {borrowPositions.length > 0 && (
             <Card>
               <CardHeader>
@@ -187,7 +202,7 @@ export default function Positions() {
                       <span className="mono">
                         {formatToken(p.debt, p.decimals)} {p.sym}
                         <span className="text-[var(--color-muted-foreground)] ml-2">
-                          (${p.usdValue.toLocaleString('en-US', { maximumFractionDigits: 0 })})
+                          ({fmtUsd(p.usdValue)})
                         </span>
                         <span className="text-[var(--color-warning)] ml-2 text-xs">
                           {p.apr.toFixed(2)}% APR
