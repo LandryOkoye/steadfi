@@ -1,0 +1,20 @@
+node_modules/
+dist/
+build/
+.cache/
+.env
+.env.*
+!.env.example
+*.local
+*.tsbuildinfo
+
+# Foundry build artifacts
+steadfi/contracts/out/
+steadfi/contracts/cache/
+steadfi/contracts/.compass-verify/
+steadfi/contracts/deploy.lock.json
+contracts/out/
+contracts/cache/
+
+# OS
+.DS_Store
