@@ -1,6 +1,6 @@
 /**
  * SteadFi deployed contract addresses and ABIs for Arc Testnet.
- * All addresses verified from deployments/testnet.json (deployed 2026-10-22).
+ * All addresses verified from deployments/testnet.json (redeployed 2026-10-23).
  * Never hardcode addresses elsewhere — import from here.
  */
 
@@ -45,19 +45,19 @@ export const BORROW_TOKENS: TokenSymbol[] = ['USDC', 'EURC']
 
 // ── Protocol contract addresses ────────────────────────────────────────────────
 export const CONTRACTS = {
-  LendingPool:  '0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B' as `0x${string}`,
-  Timelock:     '0x84393560Bc91a1C2eDea435dfdb704Ad17df0886' as `0x${string}`,
-  PythOracle:   '0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433' as `0x${string}`,
+  LendingPool:  '0x8016C259E48514ECadA4fd1082108cd55031680e' as `0x${string}`,
+  Timelock:     '0xB47CFE8465d02fF38438700D64F2cAd57FED14DF' as `0x${string}`,
+  PythOracle:   '0xb0e392899a9446F22Fc6bbe49c651c013fA35174' as `0x${string}`,
   // sTokens (supply receipt)
-  sUSDC:   '0x2BCF675A744d568107b1F67AC63f1640770E72AE' as `0x${string}`,
-  sEURC:   '0x3AF561fF92Ee6dD333484ED283dB0645c69Cf9d4' as `0x${string}`,
-  sCIRBTC: '0xfE1bb221078673c3CB6243868FB88E1E6eaCD31C' as `0x${string}`,
-  sWETH:   '0x8b16a82f9F2E991856A8Ec133e791BDDB7e6ED3e' as `0x${string}`,
+  sUSDC:   '0x32339303d275ebd5C95989661edf685ab86dc7C3' as `0x${string}`,
+  sEURC:   '0x90bfae20d362782A93E268BD2c8a8b3F6b4B2494' as `0x${string}`,
+  sCIRBTC: '0x5dE509d7ACA04a5FbFAc4f55C63f3CB3857247bb' as `0x${string}`,
+  sWETH:   '0x308ddd3a8CDe662C12FF01CcfAEBfa3A1C96B3c7' as `0x${string}`,
   // debtTokens
-  dUSDC:   '0x31D611C9A8369bB05E25a4ADcFc3D393BeD77884' as `0x${string}`,
-  dEURC:   '0x879C8451591688b0a43052aC71A3BA7524967e92' as `0x${string}`,
-  dCIRBTC: '0x06ddD42c7b9CAADa0783C7966B86b9C04D7c3364' as `0x${string}`,
-  dWETH:   '0xAD7a658FeB5dbaDe32a2347ec7997D334Fc76D56' as `0x${string}`,
+  dUSDC:   '0xCA853E2CcEfbCa888a40090C6265f6135FD1e94E' as `0x${string}`,
+  dEURC:   '0x63509D47238D97C19a350BEFE547d5319C2eB576' as `0x${string}`,
+  dCIRBTC: '0x303C4863bd1856eD0E7398f8bc01Bc20B9F786a4' as `0x${string}`,
+  dWETH:   '0x0B3a08939A5Ef898a5fD593C995061Bdc93ceFD4' as `0x${string}`,
 } as const
 
 // Map token symbol to its sToken address
@@ -215,6 +215,44 @@ export const LENDING_POOL_ABI = [
     inputs: [{ name: 'asset', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  // getBorrowPower
+  {
+    name: 'getBorrowPower',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  // getTotalDebt
+  {
+    name: 'getTotalDebt',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  // getMarketTotals
+  {
+    name: 'getMarketTotals',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [
+      { name: 'totalSupply', type: 'uint256' },
+      { name: 'totalDebt', type: 'uint256' },
+    ],
+  },
+  // getMarketRates
+  {
+    name: 'getMarketRates',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [
+      { name: 'borrowRatePerSecond', type: 'uint256' },
+      { name: 'supplyRatePerSecond', type: 'uint256' },
+    ],
+  },
   // accrueInterest
   {
     name: 'accrueInterest',
@@ -246,6 +284,76 @@ export const ERC20_ABI = [
     stateMutability: 'nonpayable',
     inputs: [{ name: 'spender', type: 'address' }, { name: 'value', type: 'uint256' }],
     outputs: [{ name: '', type: 'bool' }],
+  },
+] as const
+
+// Oracle: PythOracleAdapter.getPrice(asset) returns 1e18-scaled USD.
+// Reverts if the feed is stale — callers must treat a revert as "price unavailable".
+export const ORACLE_ABI = [
+  {
+    name: 'getPrice',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+] as const
+
+// Full event ABIs. These must match LendingPool exactly — omitting share fields
+// changes topic0 and makes getLogs silently return nothing.
+export const LENDING_POOL_EVENTS_ABI = [
+  {
+    name: 'Supply',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'shares', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'Withdraw',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'shares', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'Borrow',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'debtShares', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'Repay',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'asset', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'debtShares', type: 'uint256', indexed: false },
+      { name: 'memo', type: 'bytes', indexed: false },
+    ],
+  },
+  {
+    name: 'Liquidate',
+    type: 'event',
+    inputs: [
+      { name: 'liquidator', type: 'address', indexed: true },
+      { name: 'borrower', type: 'address', indexed: true },
+      { name: 'debtAsset', type: 'address', indexed: true },
+      { name: 'collateralAsset', type: 'address', indexed: false },
+      { name: 'debtRepaid', type: 'uint256', indexed: false },
+      { name: 'collateralSeized', type: 'uint256', indexed: false },
+    ],
   },
 ] as const
 
@@ -290,11 +398,27 @@ export function formatToken(amount: bigint, decimals: number, maxFrac = 6): stri
   })
 }
 
-/** Convert RAY rate-per-second to APY % (annualised, continuous) */
+export const SECONDS_PER_YEAR = 31_536_000n
+
+/** Convert a Ray per-second rate to a simple annual percentage (e.g. 8.00). */
 export function rayRateToApy(ratePerSec: bigint): number {
-  // APY = (1 + rate)^31536000 - 1, approximated as rate * seconds-per-year
-  const SECONDS_PER_YEAR = 31_536_000n
-  return Number(ratePerSec * SECONDS_PER_YEAR * 10000n / RAY) / 100
+  return Number(ratePerSec * SECONDS_PER_YEAR / 10n ** 23n) / 100
+}
+
+/** Convert a Ray fraction (1e27 = 100%) to a percentage (e.g. 9000 -> 90.00). */
+export function rayToPct(ray: bigint): number {
+  return Number(ray * 10_000n / RAY) / 100
+}
+
+/** Convert a native token amount to a JS number without losing small decimals. */
+export function tokenAmountToNumber(amount: bigint, decimals: number): number {
+  return Number(amount * 1_000_000n / (10n ** BigInt(decimals))) / 1e6
+}
+
+/** USD value of a native token amount, using an 1e18-scaled oracle price. */
+export function usdFromTokenAmount(amount: bigint, decimals: number, price18: bigint): number {
+  if (price18 === 0n) return 0
+  return Number(amount * price18 / (10n ** BigInt(decimals))) / 1e18
 }
 
 /** uint256 max for approvals */
