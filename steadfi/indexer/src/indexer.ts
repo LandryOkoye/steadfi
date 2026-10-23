@@ -48,8 +48,8 @@ function usdcAddressFromFacts(_chainId: number): `0x${string}` {
 // ── Config ────────────────────────────────────────────────────────────────────
 const CHAIN_ID      = arcTestnet.id                        // 5042002
 const COMPASS_KEY   = 'Arc_Testnet'                        // RPC_PROXY_CHAINS key
-const LENDING_POOL  = (process.env.VITE_LENDING_POOL_ADDR ?? '0x0') as `0x${string}`
-const EURC_ADDR     = (process.env.VITE_EURC_ADDRESS ?? '0x0') as `0x${string}`
+const LENDING_POOL  = (process.env.VITE_LENDING_POOL_ADDR ?? '0x8016C259E48514ECadA4fd1082108cd55031680e') as `0x${string}`
+const EURC_ADDR     = (process.env.VITE_EURC_ADDRESS ?? KNOWN_EURC_ADDRESS) as `0x${string}`
 const PORT          = parseInt(process.env.PORT ?? '3001')
 const BATCH_SIZE    = 2_000n
 const POLL_MS       = 10_000
@@ -78,14 +78,16 @@ const RPC_URL = buildRpcUrl()
 
 // ── ABIs ──────────────────────────────────────────────────────────────────────
 const POOL_ABI = parseAbi([
-  'event Supply(address indexed user, address indexed asset, uint256 amount)',
-  'event Withdraw(address indexed user, address indexed asset, uint256 amount)',
-  'event Borrow(address indexed user, address indexed asset, uint256 amount)',
-  'event Repay(address indexed user, address indexed asset, uint256 amount, bytes memo)',
-  'event Liquidation(address indexed borrower, address debtAsset, uint256 debtRepaid, address collateral, uint256 collateralSeized, address liquidator)',
+  'event Supply(address indexed user, address indexed asset, uint256 amount, uint256 shares)',
+  'event Withdraw(address indexed user, address indexed asset, uint256 amount, uint256 shares)',
+  'event Borrow(address indexed user, address indexed asset, uint256 amount, uint256 debtShares)',
+  'event Repay(address indexed user, address indexed asset, uint256 amount, uint256 debtShares, bytes memo)',
+  'event Liquidate(address indexed liquidator, address indexed borrower, address indexed debtAsset, address collateralAsset, uint256 debtRepaid, uint256 collateralSeized)',
   'function getUserDebt(address user, address asset) view returns (uint256)',
   'function getUserSupply(address user, address asset) view returns (uint256)',
   'function getHealthFactor(address user) view returns (uint256 hf, bool isHealthy)',
+  'function getBorrowPower(address user) view returns (uint256)',
+  'function getTotalDebt(address user) view returns (uint256)',
 ])
 
 const ERC20_TRANSFER = parseAbi([
@@ -136,7 +138,8 @@ async function indexRange(from: bigint, to: bigint) {
 
   for (const log of supplyLogs) {
     if (!log.args.user || !log.args.asset || log.args.amount === undefined) continue
-    state.supplies.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, 6), block: log.blockNumber ?? 0n, ts: now })
+    const sDec = TOKEN_DECIMALS[log.args.asset.toLowerCase()] ?? 6
+    state.supplies.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, sDec), block: log.blockNumber ?? 0n, ts: now })
   }
 
   for (const log of borrowLogs) {
@@ -158,14 +161,16 @@ async function indexRange(from: bigint, to: bigint) {
 
   for (const log of liqLogs) {
     if (!log.args.borrower) continue
+    const debtDec = TOKEN_DECIMALS[(log.args.debtAsset ?? '').toLowerCase()] ?? 6
+    const collDec = TOKEN_DECIMALS[(log.args.collateralAsset ?? '').toLowerCase()] ?? 18
     state.liquidations.push({
       borrower:         log.args.borrower,
       debtAsset:        log.args.debtAsset        ?? '',
-      debtRepaid:       log.args.debtRepaid        !== undefined ? formatUnits(log.args.debtRepaid, 6)        : '0',
-      collateral:       log.args.collateral        ?? '',
-      collateralSeized: log.args.collateralSeized  !== undefined ? formatUnits(log.args.collateralSeized, 8) : '0',
-      liquidator:       log.args.liquidator        ?? '',
-      block:            log.blockNumber            ?? 0n,
+      debtRepaid:       log.args.debtRepaid       !== undefined ? formatUnits(log.args.debtRepaid, debtDec)       : '0',
+      collateral:       log.args.collateralAsset  ?? '',
+      collateralSeized: log.args.collateralSeized !== undefined ? formatUnits(log.args.collateralSeized, collDec) : '0',
+      liquidator:       log.args.liquidator       ?? '',
+      block:            log.blockNumber           ?? 0n,
     })
   }
 
@@ -210,18 +215,28 @@ async function handleRequest(req: Request): Promise<Response> {
 
   if (url.pathname === '/health') return json({ ok: true, lastBlock: state.lastBlock.toString() })
 
-  if (url.pathname === '/markets') return json({ assets: [USDC_ADDR, EURC_ADDR], lastBlock: state.lastBlock.toString() })
+  if (url.pathname === '/markets') return json({ assets: [USDC_ADDR, EURC_ADDR, KNOWN_CIRBTC_ADDRESS, KNOWN_WETH_ADDRESS], lastBlock: state.lastBlock.toString() })
 
   const posMatch = url.pathname.match(/^\/positions\/(0x[0-9a-fA-F]{40})$/)
   if (posMatch) {
     const user = posMatch[1] as `0x${string}`
     try {
-      const [debtUsdc, collateral, hfRay] = await Promise.all([
-        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getUserDebt',       args: [user, USDC_ADDR] }),
-        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getUserCollateral', args: [user, USDC_ADDR] }),
-        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getHealthFactor',   args: [user] }),
+      const [debtUsdc, supplyUsdc, hf, borrowPower, totalDebt] = await Promise.all([
+        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getUserDebt',    args: [user, USDC_ADDR] }),
+        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getUserSupply',  args: [user, USDC_ADDR] }),
+        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getHealthFactor', args: [user] }),
+        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getBorrowPower',  args: [user] }),
+        publicClient.readContract({ address: LENDING_POOL, abi: POOL_ABI, functionName: 'getTotalDebt',    args: [user] }),
       ])
-      return json({ user, debtUsdc: formatUnits(debtUsdc, 6), collateralUsdc: formatUnits(collateral, 6), healthFactor: (Number(hfRay) / 1e27).toFixed(4) })
+      const [hfRay] = hf as readonly [bigint, boolean]
+      return json({
+        user,
+        debtUsdc: formatUnits(debtUsdc, 6),
+        supplyUsdc: formatUnits(supplyUsdc, 6),
+        borrowPowerUsd: formatUnits(borrowPower, 18),
+        totalDebtUsd: formatUnits(totalDebt, 18),
+        healthFactor: (Number(hfRay) / 1e27).toFixed(4),
+      })
     } catch (err) { return json({ error: String(err) }) }
   }
 
@@ -252,5 +267,6 @@ async function handleRequest(req: Request): Promise<Response> {
 console.log(`[indexer] Starting | port: ${PORT} | pool: ${LENDING_POOL} | USDC: ${USDC_ADDR}`)
 syncLoop().catch(console.error)
 setInterval(() => syncLoop().catch(console.error), POLL_MS)
+// @ts-expect-error — Bun provides this global at runtime
 Bun.serve({ port: PORT, fetch: handleRequest })
 console.log(`[indexer] API live at http://localhost:${PORT}`)
