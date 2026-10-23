@@ -11,7 +11,6 @@ import {
   type Blockchain as ScpBlockchain,
   type CircleSmartContractPlatformClient,
 } from '@circle-fin/smart-contract-platform';
-import { getChain } from '@circlefin/compass-chains';
 import { type Abi, type Hex, createPublicClient, createWalletClient, encodeFunctionData, http, keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -63,12 +62,31 @@ const ACTIVE_CHAIN: ChainConfig = {
   gasToken: 'native',
 };
 
-function resolveChainDef(compassChain: string): ReturnType<typeof getChain> {
-  try {
-    return getChain(compassChain);
-  } catch {
+interface LocalChainDef {
+  name: string;
+  explorerUrl?: string;
+  nativeCurrency: { symbol: string };
+}
+
+const COMPASS_CHAINS: Record<string, LocalChainDef> = {
+  Arc_Testnet: {
+    name: 'Arc Testnet',
+    explorerUrl: 'https://explorer.testnet.arc.io',
+    nativeCurrency: { symbol: 'USDC' },
+  },
+  Base_Sepolia: {
+    name: 'Base Sepolia',
+    explorerUrl: 'https://sepolia.basescan.org',
+    nativeCurrency: { symbol: 'ETH' },
+  },
+};
+
+function resolveChainDef(compassChain: string): LocalChainDef {
+  const def = COMPASS_CHAINS[compassChain];
+  if (!def) {
     throw new Error(`Unknown --compass-chain "${compassChain}". Expected a Compass chain id (e.g. Arc_Testnet, Base_Sepolia).`);
   }
+  return def;
 }
 
 function explorerUrlFor(address: string): string {
