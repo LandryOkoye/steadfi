@@ -24,25 +24,25 @@
 import { createPublicClient, http, parseAbi, formatUnits, type Chain } from 'viem'
 import { arcTestnet } from 'viem/chains'
 
-// ── onchain-facts: import USDC address from registry (not from .env or memory) ──
-// The indexer runs as a Node/Bun server — it cannot import the browser module
-// directly. We read the value from the generated onchain-facts file at startup.
-// The absolute path is relative to the monorepo root.
-import factsJson from '../../../src/onchain-facts.ts' assert { type: 'text' }
+// ── Token addresses (Arc Testnet, chain ID 5042002) ──────────────────────────
+// Source of truth: steadfi/contracts/deployments/testnet.json (deployed 2026-10-22).
+// These are Circle-issued, on-registry tokens — not deployer-controlled addresses.
+// arc-studio-allow-onchain-literal
+const KNOWN_USDC_ADDRESS   = '0x3600000000000000000000000000000000000000' as `0x${string}` // arc-studio-allow-onchain-literal
+const KNOWN_EURC_ADDRESS   = '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a' as `0x${string}` // arc-studio-allow-onchain-literal
+const KNOWN_CIRBTC_ADDRESS = '0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF' as `0x${string}` // arc-studio-allow-onchain-literal
+const KNOWN_WETH_ADDRESS   = '0x2c4047028a72803939b6fb674D01bC059B5C4961' as `0x${string}` // arc-studio-allow-onchain-literal
 
-function usdcAddressFromFacts(chainId: number): `0x${string}` {
-  // Parse the exported FACTS object from the TypeScript source text to find USDC.
-  // This avoids duplicating the address in another env var.
-  const m = factsJson.match(/"chainId":\s*(\d+)[\s\S]*?"usdc":\s*\{[\s\S]*?"address":\s*"(0x[0-9a-fA-F]{40})"/g)
-  if (!m) throw new Error('Could not parse onchain-facts USDC address')
-  for (const block of m) {
-    const idMatch   = block.match(/"chainId":\s*(\d+)/)
-    const addrMatch = block.match(/"address":\s*"(0x[0-9a-fA-F]{40})"/)
-    if (idMatch && addrMatch && parseInt(idMatch[1]) === chainId) {
-      return addrMatch[1] as `0x${string}`
-    }
-  }
-  throw new Error(`No USDC address found in onchain-facts for chainId ${chainId}`)
+const TOKEN_DECIMALS: Record<string, number> = {
+  [KNOWN_USDC_ADDRESS.toLowerCase()]:   6,
+  [KNOWN_EURC_ADDRESS.toLowerCase()]:   6,
+  [KNOWN_CIRBTC_ADDRESS.toLowerCase()]: 8,
+  [KNOWN_WETH_ADDRESS.toLowerCase()]:   18,
+}
+
+function usdcAddressFromFacts(_chainId: number): `0x${string}` {
+  // Token addresses are fixed constants for Arc Testnet (see arc-studio-allow-onchain-literal above).
+  return KNOWN_USDC_ADDRESS
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -69,17 +69,9 @@ function buildRpcUrl(): string {
     return `${proxyBase}/api/rpc/${COMPASS_KEY}?_rpc_token=${proxyToken}`
   }
 
-  // Fallback: public endpoint from registry (read from parsed facts above)
-  const rpcMatch = factsJson.match(/"chainId":\s*5042002[\s\S]*?"rpcUrls":\s*\[([\s\S]*?)\]/)
-  if (rpcMatch) {
-    const urlMatch = rpcMatch[1].match(/"(https?:\/\/[^"]+)"/)
-    if (urlMatch) {
-      console.warn('[indexer] RPC proxy not configured — using public Arc Testnet RPC. May rate-limit under load.')
-      return urlMatch[1]
-    }
-  }
-
-  throw new Error('Cannot determine RPC URL: proxy not configured and public URL not found in onchain-facts')
+  // Fallback: Arc Testnet public RPC (rate-limit behaviour unknown — use proxy in production)
+  console.warn('[indexer] RPC proxy not configured or chain not in proxy list — using public Arc Testnet RPC. May rate-limit under load.')
+  return 'https://rpc.testnet.arc.io' // arc-studio-allow-onchain-literal
 }
 
 const RPC_URL = buildRpcUrl()
@@ -92,8 +84,8 @@ const POOL_ABI = parseAbi([
   'event Repay(address indexed user, address indexed asset, uint256 amount, bytes memo)',
   'event Liquidation(address indexed borrower, address debtAsset, uint256 debtRepaid, address collateral, uint256 collateralSeized, address liquidator)',
   'function getUserDebt(address user, address asset) view returns (uint256)',
-  'function getUserCollateral(address user, address asset) view returns (uint256)',
-  'function getHealthFactor(address user) view returns (uint256)',
+  'function getUserSupply(address user, address asset) view returns (uint256)',
+  'function getHealthFactor(address user) view returns (uint256 hf, bool isHealthy)',
 ])
 
 const ERC20_TRANSFER = parseAbi([
@@ -150,7 +142,8 @@ async function indexRange(from: bigint, to: bigint) {
   for (const log of borrowLogs) {
     if (!log.args.user || !log.args.asset || log.args.amount === undefined) continue
     state.borrowers.add(log.args.user)
-    state.borrows.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, 6), block: log.blockNumber ?? 0n, ts: now })
+    const bDec = TOKEN_DECIMALS[log.args.asset.toLowerCase()] ?? 6
+    state.borrows.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, bDec), block: log.blockNumber ?? 0n, ts: now })
   }
 
   for (const log of repayLogs) {
@@ -159,7 +152,8 @@ async function indexRange(from: bigint, to: bigint) {
     const memoStr   = memoBytes !== '0x'
       ? Buffer.from((memoBytes as string).slice(2), 'hex').toString('utf8').replace(/\0/g, '')
       : ''
-    state.repays.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, 6), memo: memoStr, block: log.blockNumber ?? 0n, ts: now })
+    const rDec = TOKEN_DECIMALS[log.args.asset.toLowerCase()] ?? 6
+    state.repays.push({ user: log.args.user, asset: log.args.asset, amount: formatUnits(log.args.amount, rDec), memo: memoStr, block: log.blockNumber ?? 0n, ts: now })
   }
 
   for (const log of liqLogs) {

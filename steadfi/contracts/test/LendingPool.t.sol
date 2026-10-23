@@ -114,14 +114,15 @@ contract LendingPoolTest is Test {
             interestModel: address(irm),
             oracle:        address(oracle),
             decimals:      6,
-            ltv:           8500,
-            liqThreshold:  9000,
+            ltv: 0,
+            liqThreshold: 0,
             liqBonus:      500,
             reserveFactor: 1000,
             closeFactor:   5000,
             supplyCap:     10_000_000e6,
             borrowCap:     8_000_000e6,
             borrowEnabled: true,
+            collateralEnabled: false,
             active:        true,
             paused:        false
         }));
@@ -141,6 +142,7 @@ contract LendingPoolTest is Test {
             supplyCap:     50e8,
             borrowCap:     0,
             borrowEnabled: false,
+            collateralEnabled: true,
             active:        true,
             paused:        false
         }));
@@ -243,9 +245,9 @@ contract LendingPoolTest is Test {
         vm.startPrank(bob);
         cirBTC.approve(address(pool), 1e8);
         pool.supply(address(cirBTC), 1e8); // $95k collateral
-        // liqThreshold=78%, so weighted collateral = $95k * 78% = $74.1k
-        // Borrow $80k > $74.1k => HF = 74100/80000 = 0.926 < 1 => reverts
-        vm.expectRevert("LP: undercollateralized after borrow");
+        // LTV=70%, so borrow power = $95k * 70% = $66.5k.
+        // Borrowing $80k > $66.5k => reverts at LTV check (before HF check).
+        vm.expectRevert("LP: exceeds borrow power (LTV)");
         pool.borrow(address(usdc), 80_000e6);
         vm.stopPrank();
     }

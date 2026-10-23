@@ -81,8 +81,15 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         require(!_configs[asset].active, "LP: market exists");
         require(config.sToken    != address(0), "LP: zero sToken");
         require(config.debtToken != address(0), "LP: zero debtToken");
-        require(config.ltv < config.liqThreshold, "LP: LTV >= liqThreshold");
-        require(config.liqThreshold < PCT_PRECISION, "LP: liqThreshold >= 100%");
+        // For collateral-enabled assets: ltv must be < liqThreshold (both non-zero).
+        // For non-collateral assets (USDC/EURC): both ltv and liqThreshold may be 0.
+        if (config.collateralEnabled) {
+            require(config.ltv > 0 && config.liqThreshold > 0, "LP: collateral needs non-zero ltv/liqThreshold");
+            require(config.ltv < config.liqThreshold, "LP: LTV >= liqThreshold");
+            require(config.liqThreshold < PCT_PRECISION, "LP: liqThreshold >= 100%");
+        } else {
+            require(config.ltv == 0 && config.liqThreshold == 0, "LP: non-collateral must have ltv=liqThreshold=0");
+        }
         require(config.reserveFactor < PCT_PRECISION, "LP: reserveFactor >= 100%");
         require(config.closeFactor > 0 && config.closeFactor <= PCT_PRECISION, "LP: bad closeFactor");
         // Fix (audit: call-to-non-existent-address): verify dependencies are real contracts
@@ -118,8 +125,14 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 borrowCap
     ) external onlyRiskAdmin {
         _requireActiveMarket(asset);
-        require(ltv < liqThreshold, "LP: LTV >= liqThreshold");
-        require(liqThreshold < PCT_PRECISION, "LP: liqThreshold >= 100%");
+        MarketConfig storage existing = _configs[asset];
+        if (existing.collateralEnabled) {
+            require(ltv > 0 && liqThreshold > 0, "LP: collateral needs non-zero ltv/liqThreshold");
+            require(ltv < liqThreshold, "LP: LTV >= liqThreshold");
+            require(liqThreshold < PCT_PRECISION, "LP: liqThreshold >= 100%");
+        } else {
+            require(ltv == 0 && liqThreshold == 0, "LP: non-collateral must have ltv=liqThreshold=0");
+        }
         require(reserveFactor < PCT_PRECISION, "LP: reserveFactor >= 100%");
         accrueInterest(asset);
         MarketConfig storage cfg = _configs[asset];
@@ -369,11 +382,20 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 amountRay    = DecimalNormalizer.toRay(amount, cfg.decimals, true);
         require(amountRay <= totalSupRay - totalDebtRay, "LP: insufficient liquidity");
 
+        // LTV borrow-power pre-check: new total debt must not exceed sum(collateral × LTV).
+        // This is a SEPARATE check from the liquidation-threshold health factor.
+        // LTV governs how much you can borrow; liqThreshold governs when you get liquidated.
+        {
+            uint256 borrowPowerRay = _borrowPower(debtor);
+            uint256 currentDebtRay = _totalDebtOf(debtor);
+            require(currentDebtRay + amountRay <= borrowPowerRay, "LP: exceeds borrow power (LTV)");
+        }
+
         // Mint debt shares to debtor
         uint256 mintedShares = DebtToken(cfg.debtToken).mint(debtor, amountRay, state.borrowIndex);
         state.totalDebtShares += mintedShares;
 
-        // Health check against debtor's collateral
+        // Post-mint health check (uses liqThreshold — confirms position is not immediately liquidatable)
         uint256 hf = _healthFactor(debtor);
         require(hf >= RAY, "LP: undercollateralized after borrow");
 
@@ -604,6 +626,10 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     // Internal: health factor
     // -------------------------------------------------------------------------
 
+    /// @dev Health factor uses LIQUIDATION THRESHOLD for collateral weighting.
+    ///      Only assets with collateralEnabled=true count as collateral.
+    ///      USDC/EURC positions (collateralEnabled=false) are lend-and-borrow only:
+    ///      their supply never contributes to collateral but their debt always counts.
     function _healthFactor(address user) internal view returns (uint256 hf) {
         uint256 weightedCollateralRay;
         uint256 totalDebtRay;
@@ -614,16 +640,18 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
             MarketState  storage state = _states[asset];
             if (!cfg.active) continue;
 
-            // Collateral contribution
-            uint256 sShares = sToken(cfg.sToken).sharesOf(user);
-            if (sShares > 0) {
-                uint256 supplyRay    = sShares.mulRayDown(state.supplyIndex);
-                uint256 priceRay     = _assetPriceRay(asset);
-                uint256 valueRay     = HealthFactor.usdValue(supplyRay, priceRay);
-                weightedCollateralRay += HealthFactor.applyPct(valueRay, cfg.liqThreshold);
+            // Collateral contribution — only for collateralEnabled assets (cirBTC, WETH)
+            if (cfg.collateralEnabled) {
+                uint256 sShares = sToken(cfg.sToken).sharesOf(user);
+                if (sShares > 0) {
+                    uint256 supplyRay = sShares.mulRayDown(state.supplyIndex);
+                    uint256 priceRay  = _assetPriceRay(asset);
+                    uint256 valueRay  = HealthFactor.usdValue(supplyRay, priceRay);
+                    weightedCollateralRay += HealthFactor.applyPct(valueRay, cfg.liqThreshold);
+                }
             }
 
-            // Debt contribution
+            // Debt contribution — all markets (users can borrow USDC/EURC against collateral)
             uint256 dShares = DebtToken(cfg.debtToken).debtSharesOf(user);
             if (dShares > 0) {
                 uint256 debtRay  = dShares.mulRayUp(state.borrowIndex);
@@ -632,6 +660,27 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
             }
         }
         hf = HealthFactor.compute(weightedCollateralRay, totalDebtRay);
+    }
+
+    /// @dev Borrow power uses LTV (not liqThreshold) for collateral weighting.
+    ///      Returns the maximum total debt (in Ray, USD) the user is allowed to have.
+    ///      Only collateralEnabled assets count. LTV < liqThreshold so this is always
+    ///      a tighter constraint than health factor.
+    function _borrowPower(address user) internal view returns (uint256 power) {
+        for (uint256 i; i < marketList.length; ++i) {
+            address asset = marketList[i];
+            MarketConfig storage cfg   = _configs[asset];
+            MarketState  storage state = _states[asset];
+            if (!cfg.active || !cfg.collateralEnabled) continue;
+
+            uint256 sShares = sToken(cfg.sToken).sharesOf(user);
+            if (sShares > 0) {
+                uint256 supplyRay = sShares.mulRayDown(state.supplyIndex);
+                uint256 priceRay  = _assetPriceRay(asset);
+                uint256 valueRay  = HealthFactor.usdValue(supplyRay, priceRay);
+                power += HealthFactor.applyPct(valueRay, cfg.ltv);
+            }
+        }
     }
 
     function _totalDebtOf(address user) internal view returns (uint256 total) {

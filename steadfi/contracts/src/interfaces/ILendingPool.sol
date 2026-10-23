@@ -14,14 +14,15 @@ interface ILendingPool {
         address interestModel;   // IInterestRateModel implementation
         address oracle;          // IPriceOracle implementation
         uint8   decimals;        // Token decimals (6 USDC, 8 cirBTC, 18 WETH)
-        uint16  ltv;             // Loan-to-value in 1e4 (8500 = 85%)
-        uint16  liqThreshold;    // Liquidation threshold in 1e4
+        uint16  ltv;             // Loan-to-value in 1e4 (8500 = 85%). 0 for non-collateral.
+        uint16  liqThreshold;    // Liquidation threshold in 1e4. 0 for non-collateral.
         uint16  liqBonus;        // Liquidation bonus in 1e4 (500 = 5%)
         uint16  reserveFactor;   // Reserve factor in 1e4 (1000 = 10%)
         uint16  closeFactor;     // Max fraction of debt per liquidation in 1e4
         uint256 supplyCap;       // Max total supply in token native decimals
         uint256 borrowCap;       // Max total borrow in token native decimals (0 = no borrow)
         bool    borrowEnabled;   // False for collateral-only assets
+        bool    collateralEnabled; // True for cirBTC/WETH; false for USDC/EURC (lend-and-borrow only)
         bool    active;          // Market is live
         bool    paused;          // Emergency pause (per-asset)
     }

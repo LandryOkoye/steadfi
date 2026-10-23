@@ -1,5 +1,6 @@
 /**
  * Supply — supply USDC or EURC to earn interest.
+ * All data is live from LendingPool. No mocks.
  */
 import { useState } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
@@ -8,28 +9,67 @@ import AmountInput from '../components/ui/AmountInput'
 import StatRow from '../components/ui/StatRow'
 import RiskDisclosure from '../components/ui/RiskDisclosure'
 import { toast } from 'sonner'
-
-const ASSETS = [
-  { symbol: 'USDC', apy: 6.48, wallet: '1,200.00' },
-  { symbol: 'EURC', apy: 5.80, wallet: '0.00' },
-]
+import { parseUnits } from 'viem'
+import { useAccount } from 'wagmi'
+import {
+  useTokenBalance, useTokenAllowance, useApprove, useSupply, useMarketData,
+} from '../hooks/useSteadFi'
+import { CONTRACTS, BORROW_TOKENS, TokenSymbol, formatToken, txUrl } from '../lib/steadfi'
 
 export default function Supply() {
-  const [asset, setAsset] = useState(ASSETS[0])
+  const { isConnected } = useAccount()
+  const [asset, setAsset] = useState<TokenSymbol>('USDC')
   const [amount, setAmount] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
 
+  const markets = useMarketData()
+  const market = markets.find(m => m.symbol === asset)
+
+  // Live wallet balance
+  const balanceRaw = useTokenBalance(asset)
+  const decimals = asset === 'USDC' || asset === 'EURC' ? 6 : 18
+  const balanceFormatted = formatToken(balanceRaw, decimals)
+
+  // Allowance check
+  const allowance = useTokenAllowance(asset, CONTRACTS.LendingPool)
   const numAmount = parseFloat(amount) || 0
-  const estYearlyEarnings = numAmount * (asset.apy / 100)
+  const amountBig = amount ? parseUnits(amount, decimals) : 0n
+  const needsApproval = allowance < amountBig
+
+  const approve = useApprove()
+  const { supply } = useSupply()
+
+  const estYearlyEarnings = numAmount * ((market?.supplyApy ?? 0) / 100)
+
+  async function handleApprove() {
+    setBusy(true)
+    try {
+      const hash = await approve(asset, CONTRACTS.LendingPool)
+      toast.success('Approval confirmed', { description: hash })
+    } catch (e: unknown) {
+      toast.error('Approval failed', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function handleSupply() {
-    if (!numAmount) return
-    setLoading(true)
-    // TODO: wire to LendingPool.supply() in Phase 3 wiring
-    await new Promise(r => setTimeout(r, 1500))
-    setLoading(false)
-    toast.success(`Supplied ${amount} ${asset.symbol} successfully`)
-    setAmount('')
+    if (!numAmount || !amountBig) return
+    setBusy(true)
+    try {
+      const hash = await supply(asset, amountBig)
+      toast.success(`Supplied ${amount} ${asset}`, {
+        description: (
+          <a href={txUrl(hash)} target="_blank" rel="noreferrer"
+             className="underline text-xs">View on explorer</a>
+        ),
+      })
+      setAmount('')
+    } catch (e: unknown) {
+      toast.error('Supply failed', { description: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -42,23 +82,20 @@ export default function Supply() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Select asset</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle>Select asset</CardTitle></CardHeader>
 
-        {/* Asset selector */}
         <div className="flex gap-2 mb-5">
-          {ASSETS.map(a => (
+          {BORROW_TOKENS.map(sym => (
             <button
-              key={a.symbol}
-              onClick={() => { setAsset(a); setAmount('') }}
+              key={sym}
+              onClick={() => { setAsset(sym); setAmount('') }}
               className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-base cursor-pointer
-                ${asset.symbol === a.symbol
+                ${asset === sym
                   ? 'border-[var(--color-primary)] bg-[var(--color-muted)] text-[var(--color-primary)]'
                   : 'border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-primary)]'
                 }`}
             >
-              {a.symbol}
+              {sym}
             </button>
           ))}
         </div>
@@ -67,30 +104,60 @@ export default function Supply() {
           label="Amount to supply"
           value={amount}
           onChange={setAmount}
-          max={asset.wallet}
-          symbol={asset.symbol}
+          max={balanceFormatted.replace(/,/g, '')}
+          symbol={asset}
           usdEquiv={numAmount > 0 ? numAmount.toLocaleString('en-US', { minimumFractionDigits: 2 }) : undefined}
           id="supply-amount"
         />
 
-        {/* Stats */}
         <div className="mt-5 space-y-0">
-          <StatRow label="Supply APY" value={<span className="text-[var(--color-success)] mono">{asset.apy.toFixed(2)}%</span>} />
-          <StatRow label="Wallet balance" value={<span className="mono">{asset.wallet} {asset.symbol}</span>} />
+          <StatRow
+            label="Supply APY"
+            value={
+              market?.loading
+                ? <span className="text-[var(--color-muted-foreground)] text-xs">loading…</span>
+                : <span className="text-[var(--color-success)] mono">{(market?.supplyApy ?? 0).toFixed(2)}%</span>
+            }
+          />
+          <StatRow
+            label="Wallet balance"
+            value={<span className="mono">{balanceFormatted} {asset}</span>}
+          />
           {numAmount > 0 && (
             <StatRow
               label="Est. yearly earnings"
-              value={<span className="mono text-[var(--color-success)]">
-                +{estYearlyEarnings.toFixed(2)} {asset.symbol}/yr
-              </span>}
+              value={<span className="text-[var(--color-success)] mono">+${estYearlyEarnings.toFixed(2)}</span>}
             />
           )}
-          <StatRow label="Gas estimate" value={<span className="mono">~$0.01 USDC</span>} hint="Arc stable fee" />
         </div>
 
-        <Button className="w-full mt-5" loading={loading} onClick={() => { void handleSupply() }} disabled={!numAmount}>
-          Supply {amount || '0'} {asset.symbol}
-        </Button>
+        {isConnected ? (
+          <div className="mt-5 space-y-2">
+            {needsApproval && amountBig > 0n && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                loading={busy}
+                onClick={() => { void handleApprove() }}
+              >
+                Approve {asset}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              className="w-full"
+              loading={busy}
+              disabled={!numAmount || needsApproval}
+              onClick={() => { void handleSupply() }}
+            >
+              Supply {asset}
+            </Button>
+          </div>
+        ) : (
+          <p className="mt-5 text-center text-sm text-[var(--color-muted-foreground)]">
+            Connect your wallet to supply
+          </p>
+        )}
       </Card>
 
       <RiskDisclosure />

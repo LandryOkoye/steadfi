@@ -1,107 +1,262 @@
 /**
- * History — transaction history with onchain memo display.
+ * History — onchain transaction history via getLogs from LendingPool.
+ * Reads Supply, Borrow, Repay, Withdraw events. No mocks.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
-import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight } from '@phosphor-icons/react'
+import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight, ArrowSquareOut } from '@phosphor-icons/react'
+import { useAccount, usePublicClient } from 'wagmi'
+import { CONTRACTS, TOKENS, TokenSymbol, txUrl } from '../lib/steadfi'
+import { formatUnits } from 'viem'
+// EVENT_TOPICS unused — topic-based filtering replaced by typed viem getLogs
 
-type TxType = 'supply' | 'borrow' | 'repay' | 'withdraw'
+type TxType = 'Supply' | 'Borrow' | 'Repay' | 'Withdraw'
 
-const ICON_MAP: Record<TxType, JSX.Element> = {
-  supply:   <ArrowCircleDown  size={16} className="text-[var(--color-success)]"     aria-hidden="true" />,
-  borrow:   <ArrowCircleUp    size={16} className="text-[var(--color-warning)]"     aria-hidden="true" />,
-  repay:    <ArrowsClockwise  size={16} className="text-[var(--color-accent)]"      aria-hidden="true" />,
-  withdraw: <ArrowCircleUpRight size={16} className="text-[var(--color-muted-foreground)]" aria-hidden="true" />,
+interface TxRecord {
+  type: TxType
+  asset: TokenSymbol
+  amount: string
+  hash: string
+  blockNumber: bigint
+  memo: string | null
 }
 
-const HISTORY = [
-  { id: '0xabc1', type: 'supply'   as TxType, asset: 'USDC',   amount: '10,000.00', ts: '2026-10-21 14:32', memo: null },
-  { id: '0xabc2', type: 'supply'   as TxType, asset: 'cirBTC', amount: '1.00000000', ts: '2026-10-21 14:35', memo: null },
-  { id: '0xabc3', type: 'borrow'   as TxType, asset: 'USDC',   amount: '35,000.00', ts: '2026-10-21 15:10', memo: null },
-  { id: '0xabc4', type: 'repay'    as TxType, asset: 'USDC',   amount: '5,000.00',  ts: '2026-10-22 09:00', memo: 'INV-2026-0042' },
-  { id: '0xabc5', type: 'repay'    as TxType, asset: 'USDC',   amount: '2,000.00',  ts: '2026-10-22 11:30', memo: 'INV-2026-0043' },
-]
+const ICON_MAP: Record<TxType, JSX.Element> = {
+  Supply:   <ArrowCircleDown    size={16} className="text-[var(--color-success)]"           aria-hidden="true" />,
+  Borrow:   <ArrowCircleUp      size={16} className="text-[var(--color-warning)]"           aria-hidden="true" />,
+  Repay:    <ArrowsClockwise    size={16} className="text-[var(--color-accent)]"            aria-hidden="true" />,
+  Withdraw: <ArrowCircleUpRight size={16} className="text-[var(--color-muted-foreground)]" aria-hidden="true" />,
+}
+
+const ASSET_BY_ADDRESS: Record<string, TokenSymbol> = Object.fromEntries(
+  Object.entries(TOKENS).map(([sym, t]) => [t.address.toLowerCase(), sym as TokenSymbol])
+)
 
 const FILTER_OPTIONS: { label: string; value: TxType | 'all' }[] = [
-  { label: 'All',      value: 'all' },
-  { label: 'Supply',   value: 'supply' },
-  { label: 'Borrow',   value: 'borrow' },
-  { label: 'Repay',    value: 'repay' },
-  { label: 'Withdraw', value: 'withdraw' },
+  { label: 'All', value: 'all' },
+  { label: 'Supply', value: 'Supply' },
+  { label: 'Borrow', value: 'Borrow' },
+  { label: 'Repay', value: 'Repay' },
+  { label: 'Withdraw', value: 'Withdraw' },
 ]
 
 export default function History() {
+  const { address, isConnected } = useAccount()
+  const publicClient = usePublicClient()
   const [filter, setFilter] = useState<TxType | 'all'>('all')
+  const [txs, setTxs] = useState<TxRecord[]>([])
+  const [loading, setLoading] = useState(false)
 
-  const filtered = HISTORY.filter(h => filter === 'all' || h.type === filter)
+  useEffect(() => {
+    if (!address || !publicClient) return
+
+    let cancelled = false
+
+    async function fetchLogs() {
+      if (!cancelled) setLoading(true)
+      try {
+        const blockNumber = await publicClient!.getBlockNumber()
+        const fromBlock = blockNumber > 5000n ? blockNumber - 5000n : 0n
+
+        // Fetch all event types in parallel
+        const [supplyLogs, borrowLogs, repayLogs, withdrawLogs] = await Promise.all([
+          publicClient!.getLogs({
+            address: CONTRACTS.LendingPool,
+            // Supply(address user, address asset, uint256 amount)
+            event: {
+              name: 'Supply',
+              type: 'event',
+              inputs: [
+                { name: 'user', type: 'address', indexed: true },
+                { name: 'asset', type: 'address', indexed: true },
+                { name: 'amount', type: 'uint256', indexed: false },
+              ],
+            },
+            args: { user: address },
+            fromBlock,
+            toBlock: blockNumber,
+          }),
+          publicClient!.getLogs({
+            address: CONTRACTS.LendingPool,
+            event: {
+              name: 'Borrow',
+              type: 'event',
+              inputs: [
+                { name: 'user', type: 'address', indexed: true },
+                { name: 'asset', type: 'address', indexed: true },
+                { name: 'amount', type: 'uint256', indexed: false },
+              ],
+            },
+            args: { user: address },
+            fromBlock,
+            toBlock: blockNumber,
+          }),
+          publicClient!.getLogs({
+            address: CONTRACTS.LendingPool,
+            event: {
+              name: 'Repay',
+              type: 'event',
+              inputs: [
+                { name: 'user', type: 'address', indexed: true },
+                { name: 'asset', type: 'address', indexed: true },
+                { name: 'amount', type: 'uint256', indexed: false },
+                { name: 'memo', type: 'bytes', indexed: false },
+              ],
+            },
+            args: { user: address },
+            fromBlock,
+            toBlock: blockNumber,
+          }),
+          publicClient!.getLogs({
+            address: CONTRACTS.LendingPool,
+            event: {
+              name: 'Withdraw',
+              type: 'event',
+              inputs: [
+                { name: 'user', type: 'address', indexed: true },
+                { name: 'asset', type: 'address', indexed: true },
+                { name: 'amount', type: 'uint256', indexed: false },
+              ],
+            },
+            args: { user: address },
+            fromBlock,
+            toBlock: blockNumber,
+          }),
+        ])
+
+        if (cancelled) return
+
+        type RawLog = { args?: { asset?: string; amount?: bigint; memo?: `0x${string}` }; transactionHash?: string; blockNumber?: bigint }
+        function parseLogs(logs: RawLog[], type: TxType): TxRecord[] {
+          return logs.map(log => {
+            const assetAddr = log.args?.asset?.toLowerCase() ?? ''
+            const assetSym = ASSET_BY_ADDRESS[assetAddr] ?? ('USDC')
+            const amount = log.args?.amount ?? 0n
+            const decimals = TOKENS[assetSym]?.decimals ?? 6
+            const memoBytes = type === 'Repay' ? log.args?.memo : null
+
+            let memoStr: string | null = null
+            if (memoBytes && memoBytes !== '0x') {
+              try {
+                memoStr = new TextDecoder().decode(
+                  Uint8Array.from(Buffer.from(memoBytes.slice(2), 'hex'))
+                )
+                if (!memoStr.trim()) memoStr = null
+              } catch { memoStr = null }
+            }
+
+            return {
+              type,
+              asset: assetSym,
+              amount: formatUnits(amount, decimals),
+              hash: log.transactionHash ?? '',
+              blockNumber: log.blockNumber ?? 0n,
+              memo: memoStr,
+            }
+          })
+        }
+
+        const all: TxRecord[] = [
+          ...parseLogs(supplyLogs, 'Supply'),
+          ...parseLogs(borrowLogs, 'Borrow'),
+          ...parseLogs(repayLogs, 'Repay'),
+          ...parseLogs(withdrawLogs, 'Withdraw'),
+        ].sort((a, b) => Number(b.blockNumber - a.blockNumber))
+
+        setTxs(all)
+      } catch (err) {
+        console.error('Failed to fetch history logs', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void fetchLogs()
+    return () => { cancelled = true }
+  }, [address, publicClient])
+
+  const filtered = txs.filter(h => filter === 'all' || h.type === filter)
 
   return (
     <div className="max-w-3xl mx-auto space-y-5">
       <div>
         <h1 className="text-2xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>History</h1>
         <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-          Your transaction history. Repayment memos are stored onchain via Arc Memo.
+          Your onchain transaction history — last 5,000 blocks. Repayment memos stored onchain.
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Transactions</CardTitle>
-          {/* Filter pills */}
-          <div className="flex gap-2 flex-wrap" role="group" aria-label="Filter transactions">
-            {FILTER_OPTIONS.map(f => (
-              <button
-                key={f.value}
-                onClick={() => setFilter(f.value)}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-base cursor-pointer
-                  ${filter === f.value
-                    ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
-                    : 'bg-[var(--color-muted)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'
-                  }`}
-                aria-pressed={filter === f.value}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        </CardHeader>
-
-        {filtered.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted-foreground)] text-center py-8">No transactions found.</p>
-        ) : (
-          <ul className="divide-y divide-[var(--color-border)]" aria-label="Transaction list">
-            {filtered.map(tx => (
-              <li key={tx.id} className="py-3 flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5">{ICON_MAP[tx.type]}</span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold capitalize text-[var(--color-foreground)]">{tx.type}</span>
-                      <span className="text-sm mono text-[var(--color-muted-foreground)]">{tx.amount} {tx.asset}</span>
-                    </div>
-                    {tx.memo && (
-                      <div className="flex items-center gap-1 mt-0.5 text-xs text-[var(--color-accent)]">
-                        <Note size={11} aria-hidden="true" />
-                        <span>{tx.memo}</span>
-                      </div>
-                    )}
-                    <div className="text-[11px] text-[var(--color-muted-foreground)] mt-0.5">{tx.ts}</div>
-                  </div>
-                </div>
-                <a
-                  href={`https://testnet.arcscan.app/tx/${tx.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[11px] text-[var(--color-accent)] hover:underline shrink-0"
-                  aria-label={`View transaction ${tx.id} on explorer`}
+      {!isConnected ? (
+        <Card>
+          <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
+            Connect your wallet to see your history.
+          </p>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Transactions</CardTitle>
+            <div className="flex gap-2 flex-wrap" role="group" aria-label="Filter transactions">
+              {FILTER_OPTIONS.map(f => (
+                <button
+                  key={f.value}
+                  onClick={() => setFilter(f.value)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-base cursor-pointer
+                    ${filter === f.value
+                      ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
+                      : 'bg-[var(--color-muted)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'
+                    }`}
                 >
-                  Explorer
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </CardHeader>
+
+          {loading ? (
+            <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">Loading history…</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
+              No transactions found in the last 5,000 blocks.
+            </p>
+          ) : (
+            <div className="divide-y divide-[var(--color-border)]">
+              {filtered.map((tx, i) => (
+                <div key={`${tx.hash}-${i}`} className="flex items-start justify-between py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">{ICON_MAP[tx.type]}</div>
+                    <div>
+                      <p className="text-sm font-medium text-[var(--color-foreground)]">
+                        {tx.type} {parseFloat(tx.amount).toLocaleString('en-US', { maximumFractionDigits: 6 })} {tx.asset}
+                      </p>
+                      {tx.memo && (
+                        <p className="text-xs text-[var(--color-muted-foreground)] flex items-center gap-1 mt-0.5">
+                          <Note size={11} aria-hidden="true" />
+                          {tx.memo}
+                        </p>
+                      )}
+                      <p className="text-xs text-[var(--color-muted-foreground)] mt-0.5">
+                        Block {tx.blockNumber.toString()}
+                      </p>
+                    </div>
+                  </div>
+                  {tx.hash && (
+                    <a
+                      href={txUrl(tx.hash)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[var(--color-muted-foreground)] hover:text-[var(--color-primary)] transition-base"
+                      aria-label="View on explorer"
+                    >
+                      <ArrowSquareOut size={14} aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

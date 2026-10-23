@@ -220,14 +220,15 @@ contract InvariantTest is Test {
             interestModel: address(irm),
             oracle:        address(oracle),
             decimals:      6,
-            ltv:           7500,  // 75%
-            liqThreshold:  8000,  // 80%
+            ltv: 0,  // 75%
+            liqThreshold: 0,  // 80%
             liqBonus:      500,   // 5%
             reserveFactor: 1000,  // 10%
             closeFactor:   5000,  // 50%
             supplyCap:     10_000_000e6,
             borrowCap:     0,
             borrowEnabled: true,
+            collateralEnabled: false,
             active:        false,
             paused:        false
         }));
@@ -249,6 +250,7 @@ contract InvariantTest is Test {
             supplyCap:     2e8,   // 2 BTC
             borrowCap:     0,
             borrowEnabled: false,
+            collateralEnabled: true,
             active:        false,
             paused:        false
         }));
@@ -366,10 +368,10 @@ contract ArcEdgeCaseTest is Test {
         pool.addMarket(address(usdc), ILendingPool.MarketConfig({
             sToken: address(sUsdc), debtToken: address(dUsdc),
             interestModel: address(irm), oracle: address(oracle),
-            decimals: 6, ltv: 7500, liqThreshold: 8000, liqBonus: 500,
+            decimals: 6, ltv: 0, liqThreshold: 0, liqBonus: 500,
             reserveFactor: 1000, closeFactor: 5000,
             supplyCap: 10_000_000e6, borrowCap: 0,
-            borrowEnabled: true, active: false, paused: false
+            borrowEnabled: true, collateralEnabled: false, active: false, paused: false
         }));
 
         sCirBTC = new sToken("sfcirBTC", "sfcirBTC", 8, address(pool), address(cirBTC));
@@ -380,6 +382,7 @@ contract ArcEdgeCaseTest is Test {
             decimals: 8, ltv: 7000, liqThreshold: 7800, liqBonus: 800,
             reserveFactor: 1500, closeFactor: 5000,
             supplyCap: 2e8, borrowCap: 0, borrowEnabled: false,
+            collateralEnabled: true,
             active: false, paused: false
         }));
 
@@ -414,13 +417,16 @@ contract ArcEdgeCaseTest is Test {
     // ─── ARC-2: Blocklisted liquidator — debt burned, collateral pending ──
 
     function test_arc2_blocklisted_liquidator() public {
-        // Setup: Alice supplies $200k USDC, Bob supplies 1 BTC and borrows $70k USDC
+        // Setup: Alice supplies $200k USDC, Bob supplies 1 BTC and borrows $60k USDC
+        // LTV=70%: borrow power = $95k * 70% = $66.5k → $60k is within LTV
         vm.prank(alice); pool.supply(address(usdc), 200_000e6);
         vm.prank(bob);   pool.supply(address(cirBTC), 1e8);
-        vm.prank(bob);   pool.borrow(address(usdc), 70_000e6);
+        vm.prank(bob);   pool.borrow(address(usdc), 60_000e6);
 
-        // Crash BTC price to $80k → HF = (80000 * 0.78) / 70000 ≈ 0.891 < 1
-        oracle.setPrice(address(cirBTC), 80_000e18);
+        // Crash BTC price to $80k → weighted collateral = $80k * 78% = $62.4k
+        // HF = $62.4k / $60k = 1.04 → still healthy. Drop further to $70k:
+        // weighted = $70k * 78% = $54.6k → HF = $54.6k / $60k = 0.91 < 1 → liquidatable
+        oracle.setPrice(address(cirBTC), 70_000e18);
 
         // Carol is blocklisted for receiving cirBTC
         cirBTC.setBlocklisted(carol, true);
@@ -555,10 +561,11 @@ contract ArcEdgeCaseTest is Test {
     function testFuzz_rounding_direction(uint256 amt) public {
         // Supply enough USDC liquidity first so borrow can succeed
         vm.prank(alice); pool.supply(address(usdc), 200_000e6);
-        // Bob supplies cirBTC collateral: 1 BTC = $95k → can borrow up to ~$74k at 78% LT
+        // Bob supplies cirBTC collateral: 1 BTC = $95k
+        // LTV=70%: borrow power = $66.5k; liqThreshold=78%: HF=1 at $74.1k
+        // Must stay within BORROW POWER (LTV), not just HF — bound to $66k
         vm.prank(bob);   pool.supply(address(cirBTC), 1e8);
-        // Bound borrow to safe range (below HF=1 threshold): $74k max
-        amt = bound(amt, 1e6, 74_000e6);
+        amt = bound(amt, 1e6, 66_000e6);
 
         vm.prank(bob);   pool.borrow(address(usdc), amt);
 

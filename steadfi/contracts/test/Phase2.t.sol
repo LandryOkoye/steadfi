@@ -112,19 +112,19 @@ contract Phase2Test is Test {
         pool.addMarket(address(usdc), ILendingPool.MarketConfig({
             sToken: address(sUSDC), debtToken: address(dUSDC),
             interestModel: address(irm), oracle: address(oracle),
-            decimals: 6, ltv: 8500, liqThreshold: 9000, liqBonus: 500,
+            decimals: 6, ltv: 0, liqThreshold: 0, liqBonus: 500,
             reserveFactor: 1000, closeFactor: 5000,
             supplyCap: 10_000_000e6, borrowCap: 8_000_000e6,
-            borrowEnabled: true, active: true, paused: false
+            borrowEnabled: true, collateralEnabled: false, active: true, paused: false
         }));
 
         pool.addMarket(address(eurc), ILendingPool.MarketConfig({
             sToken: address(sEURC), debtToken: address(dEURC),
             interestModel: address(irm), oracle: address(oracle),
-            decimals: 6, ltv: 8300, liqThreshold: 8800, liqBonus: 500,
+            decimals: 6, ltv: 0, liqThreshold: 0, liqBonus: 500,
             reserveFactor: 1000, closeFactor: 5000,
             supplyCap: 5_000_000e6, borrowCap: 4_000_000e6,
-            borrowEnabled: true, active: true, paused: false
+            borrowEnabled: true, collateralEnabled: false, active: true, paused: false
         }));
 
         pool.addMarket(address(cirBTC), ILendingPool.MarketConfig({
@@ -133,7 +133,7 @@ contract Phase2Test is Test {
             decimals: 8, ltv: 7000, liqThreshold: 7800, liqBonus: 800,
             reserveFactor: 1500, closeFactor: 5000,
             supplyCap: 50e8, borrowCap: 0,
-            borrowEnabled: false, active: true, paused: false
+            borrowEnabled: false, collateralEnabled: true, active: true, paused: false
         }));
 
         // Deploy BatchRouter (Permit2 = zero address for tests that don't use Permit2)
@@ -167,36 +167,36 @@ contract Phase2Test is Test {
         vm.stopPrank();
     }
 
-    /// @notice Borrow EURC against USDC collateral (cross-currency)
+    /// @notice Borrow EURC against cirBTC collateral (new collateral model)
+    ///         Only cirBTC/WETH are collateral; USDC/EURC are lend-and-borrow only.
     function test_eurc_borrow_against_usdc() public {
-        // Alice supplies USDC liquidity
+        // Alice supplies EURC liquidity
         vm.startPrank(alice);
         eurc.approve(address(pool), 200_000e6);
         pool.supply(address(eurc), 200_000e6);
         vm.stopPrank();
 
-        // Bob supplies USDC as collateral, borrows EURC
+        // Bob deposits cirBTC collateral and borrows EURC
+        // 1 BTC = $95k, LTV=70% → borrow power = $66.5k
+        // EURC price = $1.08, max EURC borrow = $66.5k / $1.08 ≈ 61,574 EURC
         vm.startPrank(bob);
-        usdc.approve(address(pool), 50_000e6);
-        pool.supply(address(usdc), 50_000e6);
-        // $50k USDC collateral, liqThreshold 90%, weightedCollateral = $45k USD
-        // EURC price = $1.08, max EURC borrow = $45k / $1.08 ≈ 41,666 EURC
-        pool.borrow(address(eurc), 40_000e6);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        pool.borrow(address(eurc), 40_000e6); // well under borrow power
         assertGt(pool.getUserDebt(bob, address(eurc)), 0, "eurc debt");
         vm.stopPrank();
     }
 
-    /// @notice Repay EURC debt with memo
+    /// @notice Repay EURC debt (borrowed against cirBTC collateral) with memo
     function test_eurc_repay_with_memo() public {
-        // Set up: Alice supplies EURC liquidity, Bob borrows
         vm.startPrank(alice);
         eurc.approve(address(pool), 200_000e6);
         pool.supply(address(eurc), 200_000e6);
         vm.stopPrank();
 
         vm.startPrank(bob);
-        usdc.approve(address(pool), 50_000e6);
-        pool.supply(address(usdc), 50_000e6);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
         pool.borrow(address(eurc), 20_000e6);
 
         eurc.approve(address(pool), 20_000e6);
@@ -206,53 +206,56 @@ contract Phase2Test is Test {
         vm.stopPrank();
     }
 
-    /// @notice Borrow USDC against EURC collateral (reverse cross-currency)
+    /// @notice Borrow USDC against cirBTC collateral (standard collateral model)
     function test_usdc_borrow_against_eurc() public {
-        // Alice supplies USDC
+        // Test name kept for registry but logic uses cirBTC → USDC borrow
         vm.startPrank(alice);
         usdc.approve(address(pool), 200_000e6);
         pool.supply(address(usdc), 200_000e6);
         vm.stopPrank();
 
-        // Bob supplies EURC as collateral, borrows USDC
+        // Bob deposits 1 BTC, borrows USDC
+        // LTV=70%, $95k collateral → borrow power = $66.5k
         vm.startPrank(bob);
-        eurc.approve(address(pool), 50_000e6);
-        pool.supply(address(eurc), 50_000e6);
-        // $50k * 1.08 = $54k USD value, liqThreshold 88%, weighted = $47,520 USD
-        pool.borrow(address(usdc), 45_000e6);
-        assertGt(pool.getUserDebt(bob, address(usdc)), 0, "usdc debt against eurc collateral");
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        pool.borrow(address(usdc), 50_000e6); // < $66.5k borrow power
+        assertGt(pool.getUserDebt(bob, address(usdc)), 0, "usdc debt against cirbtc collateral");
         vm.stopPrank();
     }
 
-    /// @notice EUR/USD price drop liquidates EURC-collateral position
+    /// @notice BTC price drop liquidates cirBTC-collateral position
     function test_eurc_collateral_liquidation_on_price_drop() public {
-        // Alice supplies USDC
+        // Alice supplies USDC liquidity
         vm.startPrank(alice);
         usdc.approve(address(pool), 200_000e6);
         pool.supply(address(usdc), 200_000e6);
         vm.stopPrank();
 
-        // Bob supplies EURC, borrows USDC
+        // Bob deposits cirBTC, borrows USDC near the LTV limit
         vm.startPrank(bob);
-        eurc.approve(address(pool), 50_000e6);
-        pool.supply(address(eurc), 50_000e6);
-        pool.borrow(address(usdc), 45_000e6);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        // liqThreshold=78% → HF = 1 only when debt = $95k*78% = $74.1k
+        // Borrow $66k (just within LTV), then crash price
+        pool.borrow(address(usdc), 66_000e6);
         vm.stopPrank();
 
-        // EUR price crashes 30%: $1.08 -> $0.756
-        oracle.setPrice(address(eurc), 0.756e18);
+        // BTC price crashes 20%: $95k -> $76k
+        // New weighted collateral (liqThreshold) = $76k * 78% = $59.28k
+        // Debt = $66k → HF = 59280/66000 = 0.898 < 1 → liquidatable
+        oracle.setPrice(address(cirBTC), 76_000e18);
 
-        // Position should now be unhealthy
         (uint256 hf, bool isHealthy) = pool.getHealthFactor(bob);
-        assertFalse(isHealthy, "should be unhealthy after EUR drop");
+        assertFalse(isHealthy, "should be unhealthy after BTC drop");
         assertLt(hf, 1e27, "hf < 1 RAY");
 
-        // Carol liquidates
+        // Carol liquidates (repays USDC debt, receives cirBTC)
         usdc.mint(carol, 50_000e6);
         vm.startPrank(carol);
-        usdc.approve(address(pool), 22_500e6);
-        pool.liquidate(bob, address(usdc), address(eurc), 22_500e6);
-        assertGt(eurc.balanceOf(carol), 0, "carol received eurc collateral");
+        usdc.approve(address(pool), 33_000e6);
+        pool.liquidate(bob, address(usdc), address(cirBTC), 33_000e6);
+        assertGt(cirBTC.balanceOf(carol), 0, "carol received cirBTC collateral");
         vm.stopPrank();
     }
 
@@ -413,24 +416,34 @@ contract Phase2Test is Test {
     // Cross-currency health factor test (6-dec USDC and 6-dec EURC)
     // =========================================================================
 
+    /// @notice Cross-currency: borrow both USDC and EURC against cirBTC collateral.
+    ///         Verifies HF accounts for multi-currency debt correctly.
     function test_cross_currency_health_factor() public {
-        // Alice supplies both USDC and EURC
+        // Supply liquidity for both borrow assets
         vm.startPrank(alice);
-        usdc.approve(address(pool), 100_000e6);
-        eurc.approve(address(pool), 100_000e6);
-        pool.supply(address(usdc), 100_000e6);
-        pool.supply(address(eurc), 100_000e6);
+        usdc.approve(address(pool), 200_000e6);
+        eurc.approve(address(pool), 200_000e6);
+        pool.supply(address(usdc), 200_000e6);
+        pool.supply(address(eurc), 200_000e6);
+        vm.stopPrank();
 
-        // USD value of USDC collateral: $100k * 90% liqThreshold = $90k
-        // USD value of EURC collateral: 100k * $1.08 * 88% liqThreshold = $95,040
-        // Total weighted: $185,040
-        // Borrow $100k USDC
-        pool.borrow(address(usdc), 100_000e6);
+        // Bob supplies 2 BTC as collateral
+        // LTV=70%: borrow power = 2 * $95k * 70% = $133k
+        // liqThreshold=78%: weighted collateral = 2 * $95k * 78% = $148.2k
+        vm.startPrank(bob);
+        cirBTC.approve(address(pool), 2e8);
+        pool.supply(address(cirBTC), 2e8);
 
-        (uint256 hf, bool isHealthy) = pool.getHealthFactor(alice);
+        // Borrow $30k USDC + 30k EURC ($32.4k)
+        pool.borrow(address(usdc), 30_000e6);
+        pool.borrow(address(eurc), 30_000e6);
+
+        // Total debt in USD: $30k + 30k * $1.08 = $62.4k
+        // Weighted collateral (liqThreshold): $148.2k
+        // HF = $148.2k / $62.4k ≈ 2.375 > 1
+        (uint256 hf, bool isHealthy) = pool.getHealthFactor(bob);
         assertTrue(isHealthy, "should be healthy");
-        // HF = $185,040 / $100,000 > 1 RAY
-        assertGt(hf, 1e27, "hf > 1");
+        assertGt(hf, 1e27, "hf > 1 RAY");
         vm.stopPrank();
     }
 

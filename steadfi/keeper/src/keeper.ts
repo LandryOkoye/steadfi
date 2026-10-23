@@ -32,15 +32,21 @@ const MIN_HF_TRIGGER   = 1.0    // liquidate when HF < 1.0
 const MIN_PROFIT_USD   = 0.05   // skip if expected profit < $0.05
 
 // ── ABIs (minimal) ────────────────────────────────────────────────────────────
+// ABIs reflect deployed LendingPool (DeployPhase1.s.sol, 2026-10-22).
+// getHealthFactor returns (uint256 hfRay, bool isHealthy).
+// liquidate: (borrower, debtAsset, collateralAsset, debtAmount) — no claimNow flag.
+// getUserDebt / getUserSupply: standard position reads.
+// getUserCollateral was renamed getUserSupply in the final contract.
 const POOL_ABI = parseAbi([
-  'function getHealthFactor(address user) view returns (uint256)',
-  'function liquidate(address borrower, address debtAsset, uint256 debtAmount, address collateral, bool claimNow) external',
-  'function getMarkets() view returns (address[])',
+  'function getHealthFactor(address user) view returns (uint256 hf, bool isHealthy)',
+  'function liquidate(address borrower, address debtAsset, address collateralAsset, uint256 debtAmount) external',
   'function getUserDebt(address user, address asset) view returns (uint256)',
-  'function getUserCollateral(address user, address asset) view returns (uint256)',
-  'event Liquidation(address indexed borrower, address debtAsset, uint256 debtRepaid, address collateral, uint256 collateralSeized, address liquidator)',
+  'function getUserSupply(address user, address asset) view returns (uint256)',
+  'event Liquidation(address indexed borrower, address indexed debtAsset, uint256 debtRepaid, address indexed collateralAsset, uint256 collateralSeized, address liquidator)',
   'event Supply(address indexed user, address indexed asset, uint256 amount)',
   'event Borrow(address indexed user, address indexed asset, uint256 amount)',
+  'event Repay(address indexed user, address indexed asset, uint256 amount, bytes memo)',
+  'event Withdraw(address indexed user, address indexed asset, uint256 amount)',
 ])
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -70,12 +76,12 @@ async function getHF(
   borrower: `0x${string}`,
 ): Promise<number> {
   try {
-    const hfRay = await publicClient.readContract({
+    const [hfRay] = await publicClient.readContract({
       address: LENDING_POOL!,
       abi: POOL_ABI,
       functionName: 'getHealthFactor',
       args: [borrower],
-    })
+    }) as [bigint, boolean]
     // HF is in Ray (1e27); convert to float
     return Number(hfRay) / 1e27
   } catch {
@@ -93,7 +99,7 @@ async function collectPositions(
   try {
     const logs = await publicClient.getLogs({
       address: LENDING_POOL,
-      event: POOL_ABI[6], // Borrow event
+      event: POOL_ABI[7], // Borrow event (index 7 in updated ABI array)
       fromBlock,
       toBlock: 'latest',
     })
@@ -125,7 +131,8 @@ async function liquidate(
       address: LENDING_POOL!,
       abi: POOL_ABI,
       functionName: 'liquidate',
-      args: [borrower, debtAsset, repayAmount, collateralAsset, true],
+      // LendingPool.liquidate(borrower, debtAsset, collateralAsset, debtAmount)
+      args: [borrower, debtAsset, collateralAsset, repayAmount],
       account: walletClient.account,
     })
 

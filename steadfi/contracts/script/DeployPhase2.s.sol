@@ -89,20 +89,20 @@ contract DeployPhase2 is Script {
         pool.addMarket(USDC_TESTNET, ILendingPool.MarketConfig({
             sToken: address(sUSDC), debtToken: address(dUSDC),
             interestModel: address(irm), oracle: address(oracle),
-            decimals: 6, ltv: 8500, liqThreshold: 9000, liqBonus: 500,
+            decimals: 6, ltv: 0, liqThreshold: 0, liqBonus: 500,
             reserveFactor: 1000, closeFactor: 5000,
             supplyCap: 10_000_000e6, borrowCap: 8_000_000e6,
-            borrowEnabled: true, active: true, paused: false
+            borrowEnabled: true, collateralEnabled: false, active: true, paused: false
         }));
 
         // EURC — supply + borrow enabled (new in Phase 2)
         pool.addMarket(EURC_TESTNET, ILendingPool.MarketConfig({
             sToken: address(sEURC), debtToken: address(dEURC),
             interestModel: address(irm), oracle: address(oracle),
-            decimals: 6, ltv: 8300, liqThreshold: 8800, liqBonus: 500,
+            decimals: 6, ltv: 0, liqThreshold: 0, liqBonus: 500,
             reserveFactor: 1000, closeFactor: 5000,
             supplyCap: 5_000_000e6, borrowCap: 4_000_000e6,
-            borrowEnabled: true, active: true, paused: false
+            borrowEnabled: true, collateralEnabled: false, active: true, paused: false
         }));
 
         // cirBTC — collateral only
@@ -112,7 +112,7 @@ contract DeployPhase2 is Script {
             decimals: 8, ltv: 7000, liqThreshold: 7800, liqBonus: 800,
             reserveFactor: 1500, closeFactor: 5000,
             supplyCap: 50e8, borrowCap: 0,
-            borrowEnabled: false, active: true, paused: false
+            borrowEnabled: false, collateralEnabled: true, active: true, paused: false
         }));
 
         // WETH — collateral only
@@ -122,7 +122,7 @@ contract DeployPhase2 is Script {
             decimals: 18, ltv: 7200, liqThreshold: 8000, liqBonus: 800,
             reserveFactor: 1500, closeFactor: 5000,
             supplyCap: 200e18, borrowCap: 0,
-            borrowEnabled: false, active: true, paused: false
+            borrowEnabled: false, collateralEnabled: true, active: true, paused: false
         }));
 
         console.log("All 4 markets added.");

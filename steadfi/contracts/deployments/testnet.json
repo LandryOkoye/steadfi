@@ -1,40 +1,50 @@
 {
-  "network": "arc_testnet",
+  "network": "Arc Testnet",
   "chainId": 5042002,
   "deployedAt": "2026-10-22",
   "deployer": "0xbDD5A7a963EcA056f5A416268B1C2AC833E3e432",
-  "contracts": {
-    "LendingPool": "",
-    "InterestRateModel": "",
-    "PriceOracleAdapter": "",
-    "MockPriceOracle": "",
-    "sToken_USDC": "",
-    "sToken_EURC": "",
-    "sToken_cirBTC": "",
-    "sToken_WETH": "",
-    "DebtToken_USDC": "",
-    "DebtToken_EURC": "",
-    "Timelock": "",
-    "SmokeTest": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652"
+
+  "_comment_oracle": "Live Pyth price feeds. Verified onchain: BTC/USD live at $85,397 on Arc Testnet.",
+  "_comment_collateral": "Only cirBTC and WETH are collateralEnabled. USDC/EURC are lend-and-borrow only.",
+
+  "tokens": {
+    "USDC":   { "address": "0x3600000000000000000000000000000000000000", "decimals": 6, "source": "Arc native" },
+    "EURC":   { "address": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a", "decimals": 6, "source": "Arc testnet (docs.arc.io 2026-10-22)" },
+    "cirBTC": { "address": "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF", "decimals": 8, "source": "Arc testnet (docs.arc.io 2026-10-22)" },
+    "WETH":   { "address": "0x2c4047028a72803939b6fb674D01bC059B5C4961", "decimals": 18, "source": "Arc testnet (docs.arc.io 2026-10-22)" }
   },
-  "externalAddresses": {
-    "USDC": "0x3600000000000000000000000000000000000000",
-    "EURC": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-    "cirBTC": "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF",
-    "WETH": "0x2c4047028a72803939b6fb674D01bC059B5C4961",
-    "USYC": "0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C",
-    "USYC_Entitlements": "0xcc205224862c7641930c87679e98999d23c26113",
-    "USYC_Teller": "0x9fdF14c5B14173D74C08Af27AebFf39240dC105A",
-    "Multicall3": "0xcA11bde05977b3631167028862bE2a173976CA11",
-    "Multicall3From": "0x522fAf9A91c41c443c66765030741e4AaCe147D0",
-    "Memo": "0x5294E9927c3306DcBaDb03fe70b92e01cCede505",
-    "Permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-    "CCTP_TokenMessengerV2": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
-    "CCTP_MessageTransmitterV2": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-    "Gateway_GatewayWallet": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
-    "Gateway_GatewayMinter": "0x0022222ABE238Cc2C7Bb1f21003F0a260052475B",
-    "StableFX_FxEscrow": "0xd68256f4D69C6BbEcB873D8588AE0Dc6B8E22E10",
-    "NativeSystemEmitter": "0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE",
-    "StorkVerifier": "0xacC0a0cF13571d30B4b8637996F5D6D774d4fd62"
-  }
+
+  "oracle": {
+    "pyth": {
+      "contract":     "0x2880aB155794e7179c9eE2e38200202908C17B43",
+      "feedBtcUsd":   "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+      "feedEthUsd":   "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+      "feedEurUsd":   "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b",
+      "note": "Verified onchain 2026-10-22 (code.length = 177 bytes). getPriceUnsafe(BTC_FEED) returned $85,397."
+    }
+  },
+
+  "protocol": {
+    "Timelock":          { "address": "0x84393560Bc91a1C2eDea435dfdb704Ad17df0886", "txHash": "0x5fbf641dec046e14410ec79bd823781300a905cab1cbb4dae7d243754607f96d" },
+    "LendingPool":       { "address": "0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B", "txHash": "0x9b1f94016ceda21fbce979ac91ef092fa4d490ebb3f3804d6e2a5374bbee4da0" },
+    "IRM_Stable":        { "address": "0x041A09a5e8aCF1c618b2C7b76F560bE9D5c179A9", "txHash": "0x51a53e7f735a41054eadf2e63fd6fc061a5b1ab55b46433f40b579f05e6e452b" },
+    "IRM_Collateral":    { "address": "0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F" },
+    "PythOracleAdapter": { "address": "0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433" },
+    "sUSDC":             { "address": "0x2BCF675A744d568107b1F67AC63f1640770E72AE" },
+    "dUSDC":             { "address": "0x31D611C9A8369bB05E25a4ADcFc3D393BeD77884" },
+    "sEURC":             { "address": "0x3AF561fF92Ee6dD333484ED283dB0645c69Cf9d4" },
+    "dEURC":             { "address": "0x879C8451591688b0a43052aC71A3BA7524967e92" },
+    "sCIRBTC":           { "address": "0xfE1bb221078673c3CB6243868FB88E1E6eaCD31C" },
+    "dCIRBTC":           { "address": "0x06ddD42c7b9CAADa0783C7966B86b9C04D7c3364" },
+    "sWETH":             { "address": "0x8b16a82f9F2E991856A8Ec133e791BDDB7e6ED3e" },
+    "dWETH":             { "address": "0xAD7a658FeB5dbaDe32a2347ec7997D334Fc76D56" }
+  },
+
+  "smokeTest": {
+    "address": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652",
+    "txHash": "not-recorded"
+  },
+
+  "arcscanExplorer": "https://explorer.testnet.arc.io",
+  "deployBroadcast": "steadfi/contracts/broadcast/DeployPhase1.s.sol/5042002/run-latest.json"
 }
