@@ -95,10 +95,69 @@ contract PythOracleAdapterTest is Test {
     }
 
     function test_update_reverts_when_confidence_too_wide() public {
-        // 10% confidence interval vs 2% guard.
+        // 10% confidence interval vs 2% guard — sole feed in the batch is
+        // skipped, so nothing updates and the call reverts.
         pyth.setPayload(_payload(BTC_FEED, 8_191_200_000_000, -8, 819_120_000_000, uint64(block.timestamp)));
-        vm.expectRevert("PY: confidence too wide");
+        vm.expectRevert("PY: no fresh configured feeds");
         adapter.updatePrices{value: 1}(hex"00");
+    }
+
+    /// @dev Multi-feed payload: feed1 then feed2, each with 4 properties.
+    function _payload2(
+        uint32 feedId1, int64 price1, uint64 conf1, uint64 ts1,
+        uint32 feedId2, int64 price2, uint64 conf2, uint64 ts2
+    ) internal view returns (bytes memory) {
+        return abi.encodePacked(
+            uint32(2_479_346_549),          // LAZR payload magic
+            uint64(block.timestamp),        // payload timestamp (seconds)
+            uint8(1),                       // channel
+            uint8(2),                       // feeds length
+            feedId1,
+            uint8(4),                       // properties for feed 1
+            uint8(0), price1,               // Price
+            uint8(4), int16(-8),            // Exponent
+            uint8(5), conf1,                // Confidence
+            uint8(12), uint8(1), ts1 * 1_000_000, // FeedUpdateTimestamp (us)
+            feedId2,
+            uint8(4),                       // properties for feed 2
+            uint8(0), price2,               // Price
+            uint8(4), int16(-8),            // Exponent
+            uint8(5), conf2,                // Confidence
+            uint8(12), uint8(1), ts2 * 1_000_000  // FeedUpdateTimestamp (us)
+        );
+    }
+
+    function test_stale_feed_does_not_block_fresh_feeds() public {
+        vm.warp(1_800_000_000); // realistic timestamp so `now - 2 hours` doesn't underflow
+        // BTC fresh, EUR dormant for 2 hours (maxAge 300s).
+        // The stale feed is skipped; the fresh one still updates.
+        pyth.setPayload(_payload2(
+            BTC_FEED, 81_912_000_000_000, 100, uint64(block.timestamp),
+            EUR_FEED, 116_000_000,         100, uint64(block.timestamp - 2 hours)
+        ));
+        uint256 updated = adapter.updatePrices{value: 1}(hex"00");
+
+        assertEq(updated, 1, "only the fresh feed updates");
+        assertEq(adapter.getPrice(CIRBTC), 819_120e18, "BTC updated");
+        // EUR was skipped and never set, so no price exists for it yet.
+        vm.expectRevert("PY: no price");
+        adapter.getPrice(EURC);
+    }
+
+    function test_wide_confidence_feed_does_not_block_others() public {
+        // BTC confidence is huge (10% of price), ETH confidence tight —
+        // BTC is skipped, ETH still updates.
+        pyth.setPayload(_payload2(
+            BTC_FEED, 8_191_200_000_000, 819_120_000_000, uint64(block.timestamp),
+            ETH_FEED, 2_396_000_000_000, 100,             uint64(block.timestamp)
+        ));
+        uint256 updated = adapter.updatePrices{value: 1}(hex"00");
+
+        assertEq(updated, 1, "only the tight-confidence feed updates");
+        // price 2.396e12 with exponent -8 => $23,960
+        assertEq(adapter.getPrice(WETH), 23_960e18, "ETH updated");
+        vm.expectRevert("PY: no price");
+        adapter.getPrice(CIRBTC);
     }
 
     function test_replay_of_older_payload_is_ignored() public {

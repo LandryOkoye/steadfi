@@ -149,7 +149,10 @@ contract PythOracleAdapter is IPriceOracle, SteadFiAccessControl {
                 ? f.feedUpdateTimestamp / 1_000_000
                 : updateTime;
 
-            require(publishTime + cfg.maxAge >= block.timestamp, "PY: stale update");
+            // A single dormant feed (e.g. EUR/USD idle for hours) must not
+            // poison the whole batch — skip it; healthy feeds still update.
+            // If NOTHING is fresh, the `updated > 0` require below reverts.
+            if (publishTime + cfg.maxAge < block.timestamp) continue;
 
             // Prevent a replay of an older signed payload from overwriting a newer price.
             StoredPrice memory prev = storedPrices[asset];
@@ -157,9 +160,11 @@ contract PythOracleAdapter is IPriceOracle, SteadFiAccessControl {
 
             uint256 price = _normalise(f.price, f.exponent);
 
+            // Wide-confidence feeds are skipped (keep last-known price) so one
+            // volatile feed can't block updates for the others.
             if (f.hasConfidence && f.confidence != 0) {
                 uint256 confBps = (uint256(f.confidence) * BPS_PRECISION) / uint256(uint64(f.price));
-                require(confBps <= maxConfidenceBps, "PY: confidence too wide");
+                if (confBps > maxConfidenceBps) continue;
             }
 
             storedPrices[asset] = StoredPrice(price, publishTime, true);
