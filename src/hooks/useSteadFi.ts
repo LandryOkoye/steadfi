@@ -5,14 +5,37 @@
  */
 
 import { useReadContract, useReadContracts, useAccount, useWriteContract } from 'wagmi'
+import { useEffect, useState } from 'react'
 import { parseUnits, toHex } from 'viem'
 import {
   CONTRACTS, TOKENS, TokenSymbol, LENDING_POOL_ABI, ERC20_ABI, ORACLE_ABI,
   RAY, rayToHf, MAX_UINT256, rayRateToApy, rayToPct,
-  tokenAmountToNumber, usdFromTokenAmount,
+  tokenAmountToNumber, usdFromTokenAmount, ARC_TESTNET_CHAIN_ID,
 } from '../lib/steadfi'
 
 export const SYMBOLS: TokenSymbol[] = ['USDC', 'EURC', 'cirBTC', 'WETH']
+
+/**
+ * Predefined loan durations (days) enforced by LendingPool.borrowWithTerm.
+ * Keep in sync with the contract's isValidDuration.
+ */
+export const LOAN_DURATIONS_DAYS = [7, 14, 30, 60, 90, 180] as const
+
+/**
+ * Current wall-clock time for display purposes (due dates, overdue badges).
+ * Reads the clock only from timer callbacks (never during render) and
+ * refreshes every 60s. Returns 0 on the very first paint.
+ */
+export function useNowMs(): number {
+  const [nowMs, setNowMs] = useState(0)
+  useEffect(() => {
+    const tick = () => setNowMs(Date.now())
+    const t0 = setTimeout(tick, 0)
+    const t = setInterval(tick, 60_000)
+    return () => { clearTimeout(t0); clearInterval(t) }
+  }, [])
+  return nowMs
+}
 
 // ── Oracle prices (1e18 USD; null means the feed reverted / is stale) ─────────
 
@@ -28,6 +51,7 @@ export function useOraclePrices(): OraclePriceState {
       abi: ORACLE_ABI,
       functionName: 'getPrice' as const,
       args: [TOKENS[sym].address],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })),
     query: { refetchInterval: 12_000 },
   })
@@ -71,24 +95,28 @@ export function useMarketData(): MarketData[] {
         abi: LENDING_POOL_ABI,
         functionName: 'getMarketConfig' as const,
         args: [TOKENS[sym].address],
+        chainId: ARC_TESTNET_CHAIN_ID,
       },
       {
         address: CONTRACTS.LendingPool,
         abi: LENDING_POOL_ABI,
         functionName: 'getMarketTotals' as const,
         args: [TOKENS[sym].address],
+        chainId: ARC_TESTNET_CHAIN_ID,
       },
       {
         address: CONTRACTS.LendingPool,
         abi: LENDING_POOL_ABI,
         functionName: 'getMarketRates' as const,
         args: [TOKENS[sym].address],
+        chainId: ARC_TESTNET_CHAIN_ID,
       },
       {
         address: CONTRACTS.LendingPool,
         abi: LENDING_POOL_ABI,
         functionName: 'getUtilization' as const,
         args: [TOKENS[sym].address],
+        chainId: ARC_TESTNET_CHAIN_ID,
       },
     ]),
     query: { refetchInterval: 12_000 },
@@ -177,6 +205,7 @@ export function useUserPosition(): UserPosition {
     abi: LENDING_POOL_ABI,
     functionName: 'getHealthFactor',
     args: address ? [address] : undefined,
+    chainId: ARC_TESTNET_CHAIN_ID,
     query: { enabled: !!address, refetchInterval: 12_000 },
   })
 
@@ -188,12 +217,14 @@ export function useUserPosition(): UserPosition {
             abi: LENDING_POOL_ABI,
             functionName: 'getBorrowPower' as const,
             args: [address],
+            chainId: ARC_TESTNET_CHAIN_ID,
           },
           {
             address: CONTRACTS.LendingPool,
             abi: LENDING_POOL_ABI,
             functionName: 'getTotalDebt' as const,
             args: [address],
+            chainId: ARC_TESTNET_CHAIN_ID,
           },
         ]
       : [],
@@ -208,12 +239,14 @@ export function useUserPosition(): UserPosition {
             abi: LENDING_POOL_ABI,
             functionName: 'getUserSupply' as const,
             args: [address, TOKENS[sym].address],
+            chainId: ARC_TESTNET_CHAIN_ID,
           },
           {
             address: CONTRACTS.LendingPool,
             abi: LENDING_POOL_ABI,
             functionName: 'getUserDebt' as const,
             args: [address, TOKENS[sym].address],
+            chainId: ARC_TESTNET_CHAIN_ID,
           },
         ])
       : [],
@@ -256,6 +289,7 @@ export function useTokenBalance(symbol: TokenSymbol): bigint {
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
+    chainId: ARC_TESTNET_CHAIN_ID,
     query: { enabled: !!address, refetchInterval: 12_000 },
   })
   return data ?? 0n
@@ -272,9 +306,47 @@ export function useTokenAllowance(symbol: TokenSymbol, spender: `0x${string}`): 
     abi: ERC20_ABI,
     functionName: 'allowance',
     args: address ? [address, spender] : undefined,
+    chainId: ARC_TESTNET_CHAIN_ID,
     query: { enabled: !!address, refetchInterval: 12_000 },
   })
   return data ?? 0n
+}
+
+// ── Loan term hook ─────────────────────────────────────────────────────────────
+
+export interface LoanTerm {
+  borrowedAt: bigint
+  durationDays: number
+  dueTimestamp: bigint
+  /** ISO date string of the due date; null when no term is set. */
+  dueDate: string | null
+}
+
+/** Active fixed-term metadata for the connected user's debt in `symbol`. */
+export function useLoanTerm(symbol: TokenSymbol): LoanTerm | null {
+  const { address } = useAccount()
+
+  const { data } = useReadContract({
+    address: CONTRACTS.LendingPool,
+    abi: LENDING_POOL_ABI,
+    functionName: 'getLoanTerm',
+    args: address ? [address, TOKENS[symbol].address] : undefined,
+    chainId: ARC_TESTNET_CHAIN_ID,
+    query: { enabled: !!address, refetchInterval: 12_000 },
+  })
+
+  if (!data) return null
+  const [borrowedAtRaw, durationDaysRaw, dueRaw] = data as unknown as readonly [bigint, bigint, bigint]
+  const durationDays = Number(durationDaysRaw)
+  const dueTimestamp = dueRaw
+  return {
+    borrowedAt: borrowedAtRaw,
+    durationDays,
+    dueTimestamp,
+    dueDate: durationDays > 0 && dueTimestamp > 0n
+      ? new Date(Number(dueTimestamp) * 1000).toISOString()
+      : null,
+  }
 }
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
@@ -288,6 +360,7 @@ export function useApprove() {
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [spender, MAX_UINT256],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 }
@@ -301,6 +374,7 @@ export function useSupply() {
       abi: LENDING_POOL_ABI,
       functionName: 'supply',
       args: [TOKENS[symbol].address, amount],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 
@@ -316,6 +390,7 @@ export function useWithdraw() {
       abi: LENDING_POOL_ABI,
       functionName: 'withdraw',
       args: [TOKENS[symbol].address, amount],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 
@@ -325,12 +400,17 @@ export function useWithdraw() {
 export function useBorrow() {
   const { writeContractAsync, isPending } = useWriteContract()
 
-  const borrow = async (symbol: TokenSymbol, amount: bigint) => {
+  /** `durationDays` 0 = open-ended borrow; otherwise one of LOAN_DURATIONS_DAYS. */
+  const borrow = async (symbol: TokenSymbol, amount: bigint, durationDays: number = 0) => {
     return writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
-      functionName: 'borrow',
-      args: [TOKENS[symbol].address, amount],
+      functionName: durationDays > 0 ? 'borrowWithTerm' : 'borrow',
+      args:
+        durationDays > 0
+          ? [TOKENS[symbol].address, amount, durationDays]
+          : [TOKENS[symbol].address, amount],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 
@@ -349,6 +429,7 @@ export function useRepay() {
       abi: LENDING_POOL_ABI,
       functionName: 'repay',
       args: [TOKENS[symbol].address, amount, memoBytes],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 
@@ -369,6 +450,7 @@ export function useLiquidate() {
       abi: LENDING_POOL_ABI,
       functionName: 'liquidate',
       args: [borrower, TOKENS[debtSymbol].address, TOKENS[collateralSymbol].address, debtAmount],
+      chainId: ARC_TESTNET_CHAIN_ID,
     })
   }
 

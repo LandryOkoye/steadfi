@@ -20,6 +20,7 @@ import {
 import { ConnectKitButton } from 'connectkit'
 import NetworkBadge from '../ui/NetworkBadge'
 import GasEstimate from '../ui/GasEstimate'
+import WrongNetworkBanner from '../ui/WrongNetworkBanner'
 
 const NAV = [
   { to: '/markets',    label: 'Markets',    Icon: ChartBar },
@@ -100,6 +101,8 @@ export default function AppShell() {
             <ConnectKitButton />
           </div>
         </header>
+
+        <WrongNetworkBanner />
 
         {/* Page content */}
         <main className="flex-1 p-4 md:p-6 overflow-auto">
