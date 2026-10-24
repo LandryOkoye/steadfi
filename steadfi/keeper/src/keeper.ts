@@ -31,8 +31,8 @@ const RAW_KEEPER_KEY = process.env.KEEPER_PRIVATE_KEY
 const KEEPER_KEY = (RAW_KEEPER_KEY
   ? (RAW_KEEPER_KEY.startsWith('0x') ? RAW_KEEPER_KEY : `0x${RAW_KEEPER_KEY}`)
   : undefined) as `0x${string}` | undefined
-const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? '0x8016C259E48514ECadA4fd1082108cd55031680e') as `0x${string}`
-const ORACLE = (process.env.ORACLE_ADDR ?? '0xb0e392899a9446F22Fc6bbe49c651c013fA35174') as `0x${string}`
+const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? '0x252E8662C945e340195B35816a3f9259CA264e8C') as `0x${string}`
+const ORACLE = (process.env.ORACLE_ADDR ?? '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730') as `0x${string}`
 const PYTH_LAZER = '0xACeA761c27A909d4D3895128EBe6370FDE2dF481' as `0x${string}`
 const PYTH_API_KEY = process.env.PYTH_API_KEY
 const PYTH_PRO_URL = process.env.PYTH_PRO_URL ?? 'https://pyth-lazer.dourolabs.app'
@@ -348,7 +348,7 @@ async function main() {
     fromBlock = latest
   }
 
-  await runCycle()
+  await runCycle().catch(err => console.error('[keeper] first cycle error:', err))
   if (RUN_ONCE) {
     console.log('[keeper] RUN_ONCE=1 — single cycle complete, exiting')
     return

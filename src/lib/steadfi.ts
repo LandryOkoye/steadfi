@@ -6,6 +6,13 @@
 
 export const ARC_TESTNET_CHAIN_ID = 5042002
 
+/**
+ * Block containing the current LendingPool deployment. The History page scans
+ * logs from this block to the chain head in ≤5,000-block chunks (the Arc RPC
+ * rejects larger eth_getLogs ranges).
+ */
+export const POOL_DEPLOY_BLOCK = 68_770_501n
+
 // ── Token addresses (Arc Testnet) ─────────────────────────────────────────────
 export const TOKENS = {
   USDC: {
@@ -45,19 +52,19 @@ export const BORROW_TOKENS: TokenSymbol[] = ['USDC', 'EURC']
 
 // ── Protocol contract addresses ────────────────────────────────────────────────
 export const CONTRACTS = {
-  LendingPool:  '0x8016C259E48514ECadA4fd1082108cd55031680e' as `0x${string}`,
-  Timelock:     '0xB47CFE8465d02fF38438700D64F2cAd57FED14DF' as `0x${string}`,
-  PythOracle:   '0xb0e392899a9446F22Fc6bbe49c651c013fA35174' as `0x${string}`,
+  LendingPool:  '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x${string}`,
+  Timelock:     '0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947' as `0x${string}`,
+  PythOracle:   '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730' as `0x${string}`,
   // sTokens (supply receipt)
-  sUSDC:   '0x32339303d275ebd5C95989661edf685ab86dc7C3' as `0x${string}`,
-  sEURC:   '0x90bfae20d362782A93E268BD2c8a8b3F6b4B2494' as `0x${string}`,
-  sCIRBTC: '0x5dE509d7ACA04a5FbFAc4f55C63f3CB3857247bb' as `0x${string}`,
-  sWETH:   '0x308ddd3a8CDe662C12FF01CcfAEBfa3A1C96B3c7' as `0x${string}`,
+  sUSDC:   '0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C' as `0x${string}`,
+  sEURC:   '0x781CD39D22bD8511DDB453BF0CDc717F54A53d11' as `0x${string}`,
+  sCIRBTC: '0x37bEE970fBA42c25f766dB7eE5e7fF2D4EF79063' as `0x${string}`,
+  sWETH:   '0x9F48c6c273A23f9e3Cc141BFFfD796EcdA1Fe7D4' as `0x${string}`,
   // debtTokens
-  dUSDC:   '0xCA853E2CcEfbCa888a40090C6265f6135FD1e94E' as `0x${string}`,
-  dEURC:   '0x63509D47238D97C19a350BEFE547d5319C2eB576' as `0x${string}`,
-  dCIRBTC: '0x303C4863bd1856eD0E7398f8bc01Bc20B9F786a4' as `0x${string}`,
-  dWETH:   '0x0B3a08939A5Ef898a5fD593C995061Bdc93ceFD4' as `0x${string}`,
+  dUSDC:   '0x36F1dF20B6f61ae840B7ACf5B6B6D2E14Dd3e07E' as `0x${string}`,
+  dEURC:   '0xA6634Fd478583a15eE6487d15f66Fe8D1665187E' as `0x${string}`,
+  dCIRBTC: '0xC7ec43E4A867F3A0217248718679CeAa08e2e6De' as `0x${string}`,
+  dWETH:   '0x0Be718E5F962Ea4b84defe0ec46e787376BE1832' as `0x${string}`,
 } as const
 
 // Map token symbol to its sToken address
@@ -102,6 +109,38 @@ export const LENDING_POOL_ABI = [
     stateMutability: 'nonpayable',
     inputs: [{ name: 'asset', type: 'address' }, { name: 'amount', type: 'uint256' }],
     outputs: [],
+  },
+  // Borrow with a predefined fixed term (7/14/30/60/90/180 days)
+  {
+    name: 'borrowWithTerm',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'asset', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'durationDays', type: 'uint16' },
+    ],
+    outputs: [],
+  },
+  // getLoanTerm
+  {
+    name: 'getLoanTerm',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }, { name: 'asset', type: 'address' }],
+    outputs: [
+      { name: 'borrowedAt', type: 'uint40' },
+      { name: 'durationDays', type: 'uint16' },
+      { name: 'dueTimestamp', type: 'uint40' },
+    ],
+  },
+  // isLoanOverdue
+  {
+    name: 'isLoanOverdue',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }, { name: 'asset', type: 'address' }],
+    outputs: [{ name: '', type: 'bool' }],
   },
   // Repay
   {

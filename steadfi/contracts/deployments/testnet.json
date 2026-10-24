@@ -1,50 +1,119 @@
 {
   "network": "Arc Testnet",
   "chainId": 5042002,
-  "deployedAt": "2026-10-22",
+  "deployedAt": "2026-10-24",
   "deployer": "0xbDD5A7a963EcA056f5A416268B1C2AC833E3e432",
-
-  "_comment_oracle": "Live Pyth price feeds. Verified onchain: BTC/USD live at $85,397 on Arc Testnet.",
+  "_comment_oracle": "Live Pyth Pro (Lazer) storage adapter with per-feed stale/wide-confidence skip. Keeper pulls signed updates from the Pyth Lazer REST API and calls updatePrices(bytes).",
   "_comment_collateral": "Only cirBTC and WETH are collateralEnabled. USDC/EURC are lend-and-borrow only.",
-
   "tokens": {
-    "USDC":   { "address": "0x3600000000000000000000000000000000000000", "decimals": 6, "source": "Arc native" },
-    "EURC":   { "address": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a", "decimals": 6, "source": "Arc testnet (docs.arc.io 2026-10-22)" },
-    "cirBTC": { "address": "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF", "decimals": 8, "source": "Arc testnet (docs.arc.io 2026-10-22)" },
-    "WETH":   { "address": "0x2c4047028a72803939b6fb674D01bC059B5C4961", "decimals": 18, "source": "Arc testnet (docs.arc.io 2026-10-22)" }
-  },
-
-  "oracle": {
-    "pyth": {
-      "contract":     "0x2880aB155794e7179c9eE2e38200202908C17B43",
-      "feedBtcUsd":   "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
-      "feedEthUsd":   "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
-      "feedEurUsd":   "0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b",
-      "note": "Verified onchain 2026-10-22 (code.length = 177 bytes). getPriceUnsafe(BTC_FEED) returned $85,397."
+    "USDC": {
+      "address": "0x3600000000000000000000000000000000000000",
+      "decimals": 6,
+      "source": "Arc native"
+    },
+    "EURC": {
+      "address": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+      "decimals": 6,
+      "source": "Arc testnet (docs.arc.io 2026-10-22)"
+    },
+    "cirBTC": {
+      "address": "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF",
+      "decimals": 8,
+      "source": "Arc testnet (docs.arc.io 2026-10-22)"
+    },
+    "WETH": {
+      "address": "0x2c4047028a72803939b6fb674D01bC059B5C4961",
+      "decimals": 18,
+      "source": "Arc testnet (docs.arc.io 2026-10-22)"
     }
   },
-
-  "protocol": {
-    "Timelock":          { "address": "0x84393560Bc91a1C2eDea435dfdb704Ad17df0886", "txHash": "0x5fbf641dec046e14410ec79bd823781300a905cab1cbb4dae7d243754607f96d" },
-    "LendingPool":       { "address": "0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B", "txHash": "0x9b1f94016ceda21fbce979ac91ef092fa4d490ebb3f3804d6e2a5374bbee4da0" },
-    "IRM_Stable":        { "address": "0x041A09a5e8aCF1c618b2C7b76F560bE9D5c179A9", "txHash": "0x51a53e7f735a41054eadf2e63fd6fc061a5b1ab55b46433f40b579f05e6e452b" },
-    "IRM_Collateral":    { "address": "0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F" },
-    "PythOracleAdapter": { "address": "0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433" },
-    "sUSDC":             { "address": "0x2BCF675A744d568107b1F67AC63f1640770E72AE" },
-    "dUSDC":             { "address": "0x31D611C9A8369bB05E25a4ADcFc3D393BeD77884" },
-    "sEURC":             { "address": "0x3AF561fF92Ee6dD333484ED283dB0645c69Cf9d4" },
-    "dEURC":             { "address": "0x879C8451591688b0a43052aC71A3BA7524967e92" },
-    "sCIRBTC":           { "address": "0xfE1bb221078673c3CB6243868FB88E1E6eaCD31C" },
-    "dCIRBTC":           { "address": "0x06ddD42c7b9CAADa0783C7966B86b9C04D7c3364" },
-    "sWETH":             { "address": "0x8b16a82f9F2E991856A8Ec133e791BDDB7e6ED3e" },
-    "dWETH":             { "address": "0xAD7a658FeB5dbaDe32a2347ec7997D334Fc76D56" }
+  "oracle": {
+    "pythPro": {
+      "adapter": "0x42c69A87e59Cf8Dd845df2197d569745E7bb5730",
+      "verifier": "0xACeA761c27A909d4D3895128EBe6370FDE2dF481",
+      "verificationFeeWei": "1",
+      "feedIds": {
+        "BTC/USD": 1,
+        "ETH/USD": 2,
+        "EUR/USD": 327
+      },
+      "maxAgeSeconds": 300,
+      "rest": "https://pyth-lazer.dourolabs.app/v1/latest_price",
+      "note": "Pyth Core 0x2880aB\u20267B43 on Arc is stale (v1.4.5-alpha, PNAU-only Hermes) and is not used."
+    }
   },
-
+  "protocol": {
+    "Timelock": {
+      "address": "0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947",
+      "txHash": "0x52a6a73ddc260636e8395d547e068d8aee3395b9e018e9642fa9bd6bd1d7a89d"
+    },
+    "LendingPool": {
+      "address": "0x252E8662C945e340195B35816a3f9259CA264e8C",
+      "txHash": "0x8b266ec14c5c79640215203af08ef0765de70da3d04695e1e7317a3cb36514a2",
+      "deployBlock": 68770501,
+      "note": "Adds fixed-term borrows: borrowWithTerm(asset, amount, durationDays) with terms 7/14/30/60/90/180 days; getLoanTerm/isLoanOverdue views."
+    },
+    "IRM_Stable": {
+      "address": "0xA4eCC81c1566abFc55355ba8ED2725400E41D1e6",
+      "txHash": "0x48c5304259805b3e9b8d7510cdbe2f517a1a1db54e85591b7e87bc5e8c0b7a5d"
+    },
+    "IRM_Collateral": {
+      "address": "0xFB64d2c8dac257F7c29a0A7fD7A4FA8d668DF7C1",
+      "txHash": "0x214bcff26c995a9be14d09bb91db63ebd6268b2e81d2d22fb4d7b95ab5e30445"
+    },
+    "PythOracleAdapter": {
+      "address": "0x42c69A87e59Cf8Dd845df2197d569745E7bb5730",
+      "txHash": "0x69fab5208e154bd0c36f7dac4a0eacc16cbcc11e8097e9ad29c1dc99e1faf926",
+      "note": "Pyth Pro adapter (Lazer verifier). Skips stale/dormant and wide-confidence feeds instead of reverting the whole batch."
+    },
+    "sUSDC": {
+      "address": "0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C",
+      "txHash": "0xef420de7b14bb1a9d1fd4f85d2d30b5bbfab01fd8119483fca83a4f3997894e3"
+    },
+    "dUSDC": {
+      "address": "0x36F1dF20B6f61ae840B7ACf5B6B6D2E14Dd3e07E",
+      "txHash": "0xed47ac6b19d894bd0a18ece973fda6a834bd542b6fc3849d9f49f766a8b6c678"
+    },
+    "sEURC": {
+      "address": "0x781CD39D22bD8511DDB453BF0CDc717F54A53d11",
+      "txHash": "0x32c5590f5010b2311ce417fe987d0d9552f92f96967ff4658306c26adce107af"
+    },
+    "dEURC": {
+      "address": "0xA6634Fd478583a15eE6487d15f66Fe8D1665187E",
+      "txHash": "0xef3ac59305b039a43f90f588c62c0ab162953047fc805cbc1d88d5ed7f057eb2"
+    },
+    "sCIRBTC": {
+      "address": "0x37bEE970fBA42c25f766dB7eE5e7fF2D4EF79063",
+      "txHash": "0x2f0f6b0d71bc6b3b8504bba7832311f0ef78486e1e34aca0058e0cce6f117dc9"
+    },
+    "dCIRBTC": {
+      "address": "0xC7ec43E4A867F3A0217248718679CeAa08e2e6De",
+      "txHash": "0x3bc5cbba4d9548a56627bd124679b3b9cbbe05d0f44aa6c8fd8c55d51580c965"
+    },
+    "sWETH": {
+      "address": "0x9F48c6c273A23f9e3Cc141BFFfD796EcdA1Fe7D4",
+      "txHash": "0xf5cb83d8fdc204a4b7eb1290221eacd837b8c503f1dbb4ede2f1a584e5ae002d"
+    },
+    "dWETH": {
+      "address": "0x0Be718E5F962Ea4b84defe0ec46e787376BE1832",
+      "txHash": "0x5f056cd3ba79cd3148271e08d90506d13a214608fa9f6348b17ca101ce0d1ac9"
+    }
+  },
+  "proofTxs": {
+    "date": "2026-10-24",
+    "supplyUsdc": "0xd1950cca15a30ab02473d7073c5cc771342832c84d5283b0e443703d47227a6e",
+    "supplyCirBtc": "0x0cb0ef99041fc72652de0557a272aa85deb1437c77a14c0eb0b0edec6662acb7",
+    "borrowWithTerm7d": "0xa42769185f17670be8fab52505e81939bdb0dcbca86990227e6d7d7f9c1ae450",
+    "repayUsdc": "0xd207062c3326a6991da0dd95c64d18e50c2d94862aa05992ec8b71def60ef527",
+    "withdrawUsdc": "0x445ccf7ad2fdac7a0b9ec887f09a9547d916d48e5dfc1d0a52d18f125934ecfd",
+    "withdrawCirBtc": "0x50c03e69f0fd65f0741ea32801535228d42eb3d537eb8456697c403f84a59a36",
+    "note": "Full E2E on the 2026-10-24 pool: borrowWithTerm recorded a 7-day term (due = borrowedAt + 604800s); full repay cleared it."
+  },
   "smokeTest": {
     "address": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652",
     "txHash": "not-recorded"
   },
-
   "arcscanExplorer": "https://explorer.testnet.arc.io",
-  "deployBroadcast": "steadfi/contracts/broadcast/DeployPhase1.s.sol/5042002/run-latest.json"
+  "deployBroadcast": "broadcast/DeployPhase1.s.sol/5042002/run-latest.json",
+  "proAdapterBroadcast": "broadcast/DeployProAdapter.s.sol/5042002/run-latest.json"
 }
