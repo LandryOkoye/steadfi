@@ -37,5 +37,15 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     cors: true,
+    proxy: {
+      // Same-origin path to the Arc RPC. Browsers (extensions, privacy filters)
+      // can block cross-origin calls to rpc.testnet.arc.io, which leaves every
+      // balance/price read empty. See src/config.ts.
+      '/arc-rpc': {
+        target: 'https://rpc.testnet.arc.io',
+        changeOrigin: true,
+        rewrite: () => '/',
+      },
+    },
   },
 })
