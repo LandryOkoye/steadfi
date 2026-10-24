@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {RayMath} from "./libraries/RayMath.sol";
 import {DecimalNormalizer} from "./libraries/DecimalNormalizer.sol";
+import {ILendingPool} from "./interfaces/ILendingPool.sol";
 
 /// @title sToken
 /// @notice ERC-20 supply receipt token. Each sToken represents a share of the
@@ -188,6 +189,9 @@ contract sToken {
         require(shares[from] >= sharesToMove, "sToken: insufficient balance");
         shares[from] -= sharesToMove;
         shares[to]   += sharesToMove;
+        // Collateral must not leave an indebted position: the sender's debt must
+        // stay within LTV borrow power after the move (same rule as withdraw).
+        require(ILendingPool(lendingPool).isPositionSound(from), "sToken: transfer breaks borrow power");
         emit Transfer(from, to, value);
     }
 }

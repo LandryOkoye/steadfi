@@ -810,4 +810,221 @@ contract LendingPoolTest is Test {
         assertEq(uint256(dueTimestamp), 0);
         assertFalse(pool.isLoanOverdue(bob, address(usdc)));
     }
+
+    // -------------------------------------------------------------------------
+    // Authorization / collateral-escape regression tests
+    // -------------------------------------------------------------------------
+
+    function test_withdrawOnBehalfOf_requires_delegate() public {
+        _setupBorrower();
+
+        vm.prank(carol);
+        vm.expectRevert("LP: caller not delegate");
+        pool.withdrawOnBehalfOf(address(cirBTC), 1e8, bob);
+
+        assertEq(pool.getUserSupply(bob, address(cirBTC)), 1e8, "bob's collateral untouched");
+    }
+
+    function test_borrowOnBehalfOf_requires_delegate() public {
+        _setupBorrower();
+
+        vm.prank(carol);
+        vm.expectRevert("LP: caller not delegate");
+        pool.borrowOnBehalfOf(address(usdc), 10_000e6, bob);
+
+        assertEq(pool.getUserDebt(bob, address(usdc)), 0, "no debt forced onto bob");
+    }
+
+    function test_delegate_can_act_and_be_revoked() public {
+        _setupBorrower();
+
+        vm.prank(bob);
+        pool.setDelegate(carol, true);
+        assertTrue(pool.isDelegate(bob, carol));
+
+        uint256 before = usdc.balanceOf(carol);
+        vm.prank(carol);
+        pool.borrowOnBehalfOf(address(usdc), 1_000e6, bob);
+        assertEq(usdc.balanceOf(carol) - before, 1_000e6, "delegate receives funds");
+        assertEq(pool.getUserDebt(bob, address(usdc)), 1_000e6, "debt recorded to bob");
+
+        vm.prank(bob);
+        pool.setDelegate(carol, false);
+        vm.prank(carol);
+        vm.expectRevert("LP: caller not delegate");
+        pool.borrowOnBehalfOf(address(usdc), 1_000e6, bob);
+    }
+
+    function test_onBehalfOf_self_allowed() public {
+        _setupBorrower();
+
+        vm.prank(bob);
+        pool.borrowOnBehalfOf(address(usdc), 1_000e6, bob);
+        assertEq(pool.getUserDebt(bob, address(usdc)), 1_000e6);
+    }
+
+    function test_sToken_transfer_blocked_when_indebted() public {
+        _setupBorrower();
+        vm.prank(bob);
+        pool.borrow(address(usdc), 50_000e6); // ~$66.5k borrow power at 70% LTV
+
+        vm.prank(bob);
+        vm.expectRevert("sToken: transfer breaks borrow power");
+        sCIRBTC.transfer(carol, 1e8);
+
+        assertEq(pool.getUserSupply(bob, address(cirBTC)), 1e8, "collateral stays put");
+    }
+
+    function test_sToken_transfer_allowed_within_borrow_power() public {
+        _setupBorrower();
+        vm.prank(bob);
+        pool.borrow(address(usdc), 10_000e6);
+
+        // Moving half the BTC leaves $33.25k borrow power vs $10k debt.
+        vm.prank(bob);
+        sCIRBTC.transfer(carol, 0.5e8);
+        assertEq(pool.getUserSupply(carol, address(cirBTC)), 0.5e8);
+    }
+
+    function test_sToken_transfer_free_without_debt() public {
+        _setupBorrower();
+        vm.prank(bob);
+        sCIRBTC.transfer(carol, 1e8);
+        assertEq(pool.getUserSupply(carol, address(cirBTC)), 1e8);
+    }
+
+    function test_total_debt_priced_in_usd() public {
+        _setupBorrower();
+        vm.prank(bob);
+        pool.borrow(address(usdc), 10_000e6);
+        assertEq(pool.getTotalDebt(bob), 10_000 * RAY, "$1 asset: debt == amount");
+
+        // A borrowed asset worth $1.10 (e.g. EURC) must count at its USD value.
+        oracle.setPrice(address(usdc), 1.1e18);
+        assertEq(pool.getTotalDebt(bob), 11_000 * RAY, "debt converted at oracle price");
+    }
+
+    function test_liquidate_non_collateral_asset_reverts() public {
+        _setupBorrower();
+        vm.prank(bob);
+        pool.borrow(address(usdc), 45_000e6);
+        oracle.setPrice(address(cirBTC), 55_000e18); // 55k * 78% = 42.9k < 45k debt → HF < 1
+
+        vm.startPrank(carol);
+        usdc.approve(address(pool), type(uint256).max);
+        vm.expectRevert("LP: not collateral");
+        pool.liquidate(bob, address(usdc), address(usdc), 10_000e6);
+        vm.stopPrank();
+    }
+
+    function test_setRiskParams_validates_closeFactor_and_bonus() public {
+        vm.expectRevert("LP: bad closeFactor");
+        pool.setRiskParams(address(cirBTC), 7000, 7800, 800, 1500, 0, 50e8, 0);
+
+        vm.expectRevert("LP: bad closeFactor");
+        pool.setRiskParams(address(cirBTC), 7000, 7800, 800, 1500, 10_001, 50e8, 0);
+
+        vm.expectRevert("LP: liqBonus too high");
+        pool.setRiskParams(address(cirBTC), 7000, 7800, 2_001, 1500, 5000, 50e8, 0);
+
+        pool.setRiskParams(address(cirBTC), 7000, 7800, 800, 1500, 5000, 50e8, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Borrow (origination) fee tests
+    // -------------------------------------------------------------------------
+
+    function test_borrow_fee_added_to_debt_and_reserves() public {
+        _setupBorrower();
+        pool.setBorrowFee(address(usdc), 50); // 0.5%
+
+        uint256 balBefore = usdc.balanceOf(bob);
+        vm.expectEmit(true, true, false, true);
+        emit ILendingPool.BorrowFeeCharged(bob, address(usdc), 50e6);
+        vm.prank(bob);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 30);
+
+        assertEq(usdc.balanceOf(bob) - balBefore, 10_000e6, "borrower receives the full amount");
+        assertEq(pool.getUserDebt(bob, address(usdc)), 10_050e6, "debt = principal + fee");
+        assertEq(pool.getMarketState(address(usdc)).reservesRay, 50 * RAY, "fee credited to reserves");
+    }
+
+    function test_borrow_fee_collected_on_repay_and_withdrawable() public {
+        _setupBorrower();
+        pool.setBorrowFee(address(usdc), 100); // 1%
+        vm.startPrank(bob);
+        pool.borrow(address(usdc), 10_000e6);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.repay(address(usdc), type(uint256).max, "");
+        vm.stopPrank();
+        assertEq(pool.getUserDebt(bob, address(usdc)), 0, "fee repaid with the loan");
+
+        address treasury = address(0x7EA);
+        pool.withdrawReserves(address(usdc), treasury, 100 * RAY);
+        assertEq(usdc.balanceOf(treasury), 100e6, "protocol keeps the fee");
+        assertEq(pool.getUserSupply(alice, address(usdc)), 50_000e6, "lender principal untouched");
+    }
+
+    function test_borrow_fee_counts_against_borrow_power() public {
+        _setupBorrower();
+        usdc.mint(alice, 50_000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 50_000e6);
+        pool.supply(address(usdc), 50_000e6);
+        vm.stopPrank();
+
+        // Borrow power = $95k * 70% = $66.5k. 66k + 1% fee = 66.66k > 66.5k.
+        pool.setBorrowFee(address(usdc), 100);
+        vm.prank(bob);
+        vm.expectRevert("LP: exceeds borrow power (LTV)");
+        pool.borrow(address(usdc), 66_000e6);
+
+        pool.setBorrowFee(address(usdc), 0);
+        vm.prank(bob);
+        pool.borrow(address(usdc), 66_000e6);
+    }
+
+    function test_borrow_power_check_prices_new_debt() public {
+        _setupBorrower();
+        usdc.mint(alice, 50_000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 50_000e6);
+        pool.supply(address(usdc), 50_000e6);
+        vm.stopPrank();
+
+        // 61k of an asset worth $1.10 = $67.1k > $66.5k borrow power.
+        oracle.setPrice(address(usdc), 1.1e18);
+        vm.prank(bob);
+        vm.expectRevert("LP: exceeds borrow power (LTV)");
+        pool.borrow(address(usdc), 61_000e6);
+    }
+
+    function test_setBorrowFee_bounds_and_access() public {
+        vm.expectRevert("LP: borrow fee too high");
+        pool.setBorrowFee(address(usdc), 201);
+
+        vm.prank(bob);
+        vm.expectRevert();
+        pool.setBorrowFee(address(usdc), 50);
+
+        pool.setBorrowFee(address(usdc), 200);
+        assertEq(pool.borrowFeeBps(address(usdc)), 200);
+    }
+
+    function test_previewBorrowFee_rounds_up() public {
+        assertEq(pool.previewBorrowFee(address(usdc), 1_000e6), 0, "no fee by default");
+        pool.setBorrowFee(address(usdc), 50);
+        assertEq(pool.previewBorrowFee(address(usdc), 1_000e6), 5e6);
+        assertEq(pool.previewBorrowFee(address(usdc), 1), 1, "dust rounds up");
+    }
+
+    function test_setOracle_rejects_non_contract() public {
+        vm.expectRevert("LP: oracle is not a contract");
+        pool.setOracle(address(usdc), address(0xBEEF));
+    }
+
+    function test_withdrawReserves_rejects_zero_recipient() public {
+        vm.expectRevert("LP: zero recipient");
+        pool.withdrawReserves(address(usdc), address(0), 0);
+    }
 }

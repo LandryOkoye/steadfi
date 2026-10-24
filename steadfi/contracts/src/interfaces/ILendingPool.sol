@@ -67,6 +67,9 @@ interface ILendingPool {
     event OracleUpdated(address indexed asset, address newOracle);
     event RiskParamsUpdated(address indexed asset);
     event ReservesWithdrawn(address indexed asset, address indexed to, uint256 amount);
+    event DelegateSet(address indexed user, address indexed delegate, bool approved);
+    event BorrowFeeUpdated(address indexed asset, uint16 feeBps);
+    event BorrowFeeCharged(address indexed user, address indexed asset, uint256 fee);
 
     // -------------------------------------------------------------------------
     // Core actions
@@ -88,7 +91,19 @@ interface ILendingPool {
     function repay(address asset, uint256 amount, bytes calldata memo) external;
     /// @notice Repay debt of `onBehalfOf` (used by BatchRouter). Caller provides the funds.
     function repayOnBehalfOf(address asset, uint256 amount, address onBehalfOf, bytes calldata memo) external;
+    /// @notice Withdraw `onBehalfOf`'s supply (used by BatchRouter). Caller must be
+    ///         `onBehalfOf` or an approved delegate. Funds sent to caller.
     function withdrawOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
+    /// @notice Approve or revoke `delegate` to borrow/withdraw on the caller's behalf.
+    function setDelegate(address delegate, bool approved) external;
+    function isDelegate(address user, address delegate) external view returns (bool);
+    /// @notice False when moving `user`'s collateral would leave debt above LTV borrow power.
+    function isPositionSound(address user) external view returns (bool);
+
+    /// @notice One-time origination fee (bps) added to debt on every borrow of `asset`.
+    function borrowFeeBps(address asset) external view returns (uint16);
+    /// @notice Fee (native decimals) charged on top of borrowing `amount` of `asset`.
+    function previewBorrowFee(address asset, uint256 amount) external view returns (uint256);
     function liquidate(
         address borrower,
         address debtAsset,

@@ -33,6 +33,11 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
 
     uint256 public constant RAY           = RayMath.RAY;
     uint256 public constant PCT_PRECISION = 1e4;
+    /// @notice Upper bound for liqBonus (20%), so a liquidation can never seize
+    ///         far more collateral than the debt it repays.
+    uint256 public constant MAX_LIQ_BONUS = 2_000;
+    /// @notice Upper bound for the one-time borrow (origination) fee (2%).
+    uint256 public constant MAX_BORROW_FEE = 200;
 
     /// @notice Arc ERC-20 USDC address (same on testnet and mainnet).
     address public constant USDC = 0x3600000000000000000000000000000000000000;
@@ -53,6 +58,13 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
 
     /// @dev user => asset => pending collateral to claim (blocklist protection)
     mapping(address => mapping(address => uint256)) public pendingCollateral;
+
+    /// @dev user => delegate => may borrow/withdraw on the user's behalf (e.g. BatchRouter)
+    mapping(address => mapping(address => bool)) public override isDelegate;
+
+    /// @dev asset => one-time origination fee in basis points, added to the
+    ///      borrower's debt at borrow time and credited to protocol reserves.
+    mapping(address => uint16) public override borrowFeeBps;
 
     // -------------------------------------------------------------------------
     // Reentrancy guard
@@ -95,6 +107,7 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         }
         require(config.reserveFactor < PCT_PRECISION, "LP: reserveFactor >= 100%");
         require(config.closeFactor > 0 && config.closeFactor <= PCT_PRECISION, "LP: bad closeFactor");
+        require(config.liqBonus <= MAX_LIQ_BONUS, "LP: liqBonus too high");
         // Fix (audit: call-to-non-existent-address): verify dependencies are real contracts
         require(asset.code.length > 0,               "LP: asset is not a contract");
         require(config.sToken.code.length > 0,       "LP: sToken is not a contract");
@@ -137,6 +150,8 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
             require(ltv == 0 && liqThreshold == 0, "LP: non-collateral must have ltv=liqThreshold=0");
         }
         require(reserveFactor < PCT_PRECISION, "LP: reserveFactor >= 100%");
+        require(closeFactor > 0 && closeFactor <= PCT_PRECISION, "LP: bad closeFactor");
+        require(liqBonus <= MAX_LIQ_BONUS, "LP: liqBonus too high");
         accrueInterest(asset);
         MarketConfig storage cfg = _configs[asset];
         cfg.ltv           = ltv;
@@ -149,9 +164,25 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         emit RiskParamsUpdated(asset);
     }
 
+    /// @notice Set the one-time borrow (origination) fee for an asset. RISK_ADMIN.
+    function setBorrowFee(address asset, uint16 feeBps) external onlyRiskAdmin {
+        _requireActiveMarket(asset);
+        require(feeBps <= MAX_BORROW_FEE, "LP: borrow fee too high");
+        borrowFeeBps[asset] = feeBps;
+        emit BorrowFeeUpdated(asset, feeBps);
+    }
+
+    /// @notice Fee (native decimals) charged on top of borrowing `amount` of `asset`.
+    function previewBorrowFee(address asset, uint256 amount) public view override returns (uint256) {
+        // Round up so the protocol never under-collects on dust amounts.
+        uint256 bps = borrowFeeBps[asset];
+        return bps == 0 ? 0 : (amount * bps + PCT_PRECISION - 1) / PCT_PRECISION;
+    }
+
     /// @notice Hot-swap oracle for an asset. RISK_ADMIN.
     function setOracle(address asset, address oracle) external onlyRiskAdmin {
         _requireActiveMarket(asset);
+        require(oracle.code.length > 0, "LP: oracle is not a contract");
         _configs[asset].oracle = oracle;
         emit OracleUpdated(asset, oracle);
     }
@@ -170,6 +201,7 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         nonReentrant
     {
         _requireActiveMarket(asset);
+        require(to != address(0), "LP: zero recipient");
         accrueInterest(asset);
         MarketState storage state = _states[asset];
         require(amountRay <= state.reservesRay, "LP: insufficient reserves");
@@ -305,14 +337,23 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     }
 
     /// @notice Withdraw on behalf of `onBehalfOf`. Burns their sTokens; sends to caller.
-    ///         Used by BatchRouter — caller must have sToken allowance from onBehalfOf.
+    ///         Used by BatchRouter — caller must be an approved delegate of onBehalfOf.
     function withdrawOnBehalfOf(address asset, uint256 amount, address onBehalfOf)
         external
         override
         nonReentrant
     {
         require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _requireDelegate(onBehalfOf);
         _withdraw(asset, amount, onBehalfOf, msg.sender);
+    }
+
+    /// @notice Approve or revoke `delegate` to borrow/withdraw on the caller's behalf.
+    ///         Delegates receive the funds, so only approve trusted contracts.
+    function setDelegate(address delegate, bool approved) external override {
+        require(delegate != address(0), "LP: zero delegate");
+        isDelegate[msg.sender][delegate] = approved;
+        emit DelegateSet(msg.sender, delegate, approved);
     }
 
     function _withdraw(address asset, uint256 amount, address owner, address recipient) internal {
@@ -362,13 +403,14 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     }
 
     /// @notice Borrow on behalf of `onBehalfOf`. Debt recorded to onBehalfOf;
-    ///         funds sent to caller. Health factor checked against onBehalfOf.
+    ///         funds sent to caller. Caller must be an approved delegate.
     function borrowOnBehalfOf(address asset, uint256 amount, address onBehalfOf)
         external
         override
         nonReentrant
     {
         require(onBehalfOf != address(0), "LP: zero onBehalfOf");
+        _requireDelegate(onBehalfOf);
         _borrow(asset, amount, onBehalfOf, msg.sender);
     }
 
@@ -398,30 +440,41 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         MarketConfig storage cfg   = _configs[asset];
         MarketState  storage state = _states[asset];
 
-        // Borrow cap check
+        // Origination fee: added to the debt (the borrower still receives `amount`)
+        // and credited to reserves, so it is collected when the loan is repaid.
+        uint256 fee = previewBorrowFee(asset, amount);
+
+        // Borrow cap check (counts the fee, since it is debt too)
         uint256 totalBorrow_ = DecimalNormalizer.fromRay(
             state.totalDebtShares.mulRayUp(state.borrowIndex), cfg.decimals, true
         );
-        require(cfg.borrowCap == 0 || totalBorrow_ + amount <= cfg.borrowCap, "LP: borrow cap reached");
+        require(cfg.borrowCap == 0 || totalBorrow_ + amount + fee <= cfg.borrowCap, "LP: borrow cap reached");
 
-        // Liquidity check
+        // Liquidity check (only `amount` leaves the pool)
         uint256 totalSupRay  = state.totalSupplyShares.mulRayDown(state.supplyIndex);
         uint256 totalDebtRay = state.totalDebtShares.mulRayUp(state.borrowIndex);
         uint256 amountRay    = DecimalNormalizer.toRay(amount, cfg.decimals, true);
+        uint256 feeRay       = DecimalNormalizer.toRay(fee, cfg.decimals, true);
         require(amountRay <= totalSupRay - totalDebtRay, "LP: insufficient liquidity");
 
         // LTV borrow-power pre-check: new total debt must not exceed sum(collateral × LTV).
         // This is a SEPARATE check from the liquidation-threshold health factor.
         // LTV governs how much you can borrow; liqThreshold governs when you get liquidated.
+        // Both sides are in Ray USD, so the new debt is priced before comparing.
         {
             uint256 borrowPowerRay = _borrowPower(debtor);
             uint256 currentDebtRay = _totalDebtOf(debtor);
-            require(currentDebtRay + amountRay <= borrowPowerRay, "LP: exceeds borrow power (LTV)");
+            uint256 newDebtUsdRay  = HealthFactor.usdValue(amountRay + feeRay, _assetPriceRay(asset));
+            require(currentDebtRay + newDebtUsdRay <= borrowPowerRay, "LP: exceeds borrow power (LTV)");
         }
 
-        // Mint debt shares to debtor
-        uint256 mintedShares = DebtToken(cfg.debtToken).mint(debtor, amountRay, state.borrowIndex);
+        // Mint debt shares (principal + fee) to debtor
+        uint256 mintedShares = DebtToken(cfg.debtToken).mint(debtor, amountRay + feeRay, state.borrowIndex);
         state.totalDebtShares += mintedShares;
+        if (feeRay > 0) {
+            state.reservesRay += feeRay;
+            emit BorrowFeeCharged(debtor, asset, fee);
+        }
 
         // Post-mint health check (uses liqThreshold — confirms position is not immediately liquidatable)
         uint256 hf = _healthFactor(debtor);
@@ -509,6 +562,9 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     ) external override nonReentrant {
         require(borrower != msg.sender, "LP: self-liquidation");
         require(debtAmount > 0, "LP: zero debtAmount");
+        _requireActiveMarket(debtAsset);
+        _requireActiveMarket(collateralAsset);
+        require(_configs[collateralAsset].collateralEnabled, "LP: not collateral");
 
         accrueInterest(debtAsset);
         accrueInterest(collateralAsset);
@@ -696,6 +752,14 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         return _totalDebtOf(user);
     }
 
+    /// @notice True when `user` has no debt or their debt is within LTV borrow power.
+    ///         sToken calls this after every transfer so collateral cannot be moved
+    ///         out of an indebted position.
+    function isPositionSound(address user) external view override returns (bool) {
+        uint256 debt = _totalDebtOf(user);
+        return debt == 0 || debt <= _borrowPower(user);
+    }
+
     /// @notice Total supply and total debt for a market, in the token's native decimals.
     function getMarketTotals(address asset)
         external
@@ -792,6 +856,8 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         }
     }
 
+    /// @dev Total debt across all markets in Ray USD (each market priced by its oracle,
+    ///      so EURC debt is not counted 1:1 with USDC).
     function _totalDebtOf(address user) internal view returns (uint256 total) {
         for (uint256 i; i < marketList.length; ++i) {
             address asset = marketList[i];
@@ -799,7 +865,9 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
             MarketState  storage state = _states[asset];
             if (!cfg.active) continue;
             uint256 dShares = DebtToken(cfg.debtToken).debtSharesOf(user);
-            if (dShares > 0) total += dShares.mulRayUp(state.borrowIndex);
+            if (dShares > 0) {
+                total += HealthFactor.usdValue(dShares.mulRayUp(state.borrowIndex), _assetPriceRay(asset));
+            }
         }
     }
 
@@ -858,6 +926,13 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     // -------------------------------------------------------------------------
     // Internal: guards
     // -------------------------------------------------------------------------
+
+    function _requireDelegate(address onBehalfOf) internal view {
+        require(
+            msg.sender == onBehalfOf || isDelegate[onBehalfOf][msg.sender],
+            "LP: caller not delegate"
+        );
+    }
 
     function _requireActiveMarket(address asset) internal view {
         require(_configs[asset].active, "LP: market not active");
