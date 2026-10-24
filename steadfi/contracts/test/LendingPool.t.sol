@@ -252,6 +252,51 @@ contract LendingPoolTest is Test {
         vm.stopPrank();
     }
 
+    // -------------------------------------------------------------------------
+    // Withdraw LTV tests
+    // -------------------------------------------------------------------------
+
+    function test_withdraw_exceeding_ltv_reverts() public {
+        // Alice provides liquidity
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100_000e6);
+        pool.supply(address(usdc), 100_000e6);
+        vm.stopPrank();
+
+        // Bob deposits 1 BTC ($95k), borrows at the LTV limit ($66.5k)
+        vm.startPrank(bob);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.borrow(address(usdc), 66_500e6);
+
+        // Withdrawing 0.1 BTC leaves $85.5k collateral => $59.85k LTV power,
+        // below the $66.5k debt. Must revert on the LTV check even though the
+        // liquidation-threshold health factor would still be healthy.
+        vm.expectRevert("LP: exceeds borrow power (LTV)");
+        pool.withdraw(address(cirBTC), 0.1e8);
+        vm.stopPrank();
+    }
+
+    function test_withdraw_within_ltv_succeeds() public {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100_000e6);
+        pool.supply(address(usdc), 100_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.borrow(address(usdc), 30_000e6);
+
+        // Remaining $47.5k collateral => $33.25k LTV power > $30k debt.
+        pool.withdraw(address(cirBTC), 0.5e8);
+        vm.stopPrank();
+
+        assertEq(pool.getUserSupply(bob, address(cirBTC)), 0.5e8, "half collateral withdrawn");
+    }
+
     function test_borrow_disabled_asset_reverts() public {
         vm.startPrank(bob);
         cirBTC.approve(address(pool), 1e8);
@@ -566,9 +611,203 @@ contract LendingPoolTest is Test {
         pool.supply(address(cirBTC), 1e8); // $95k collateral
         pool.borrow(address(usdc), 60_000e6); // within LTV but large
 
-        // Try to withdraw all cirBTC — would leave debt uncovered
-        vm.expectRevert("LP: would be undercollateralized");
+        // Try to withdraw all cirBTC — the LTV borrow-power guard fires first
+        // (it is intentionally stricter than the liquidation-threshold check).
+        vm.expectRevert("LP: exceeds borrow power (LTV)");
         pool.withdraw(address(cirBTC), 1e8);
         vm.stopPrank();
+    }
+
+    // -------------------------------------------------------------------------
+    // Loan duration (fixed-term borrow) tests
+    // -------------------------------------------------------------------------
+
+    /// @dev Sets up alice as USDC lender and bob with cirBTC collateral.
+    function _setupBorrower() internal {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 50_000e6);
+        pool.supply(address(usdc), 50_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        cirBTC.approve(address(pool), 1e8);
+        pool.supply(address(cirBTC), 1e8);
+        vm.stopPrank();
+    }
+
+    function test_isValidDuration() public view {
+        assertTrue(pool.isValidDuration(7));
+        assertTrue(pool.isValidDuration(14));
+        assertTrue(pool.isValidDuration(30));
+        assertTrue(pool.isValidDuration(60));
+        assertTrue(pool.isValidDuration(90));
+        assertTrue(pool.isValidDuration(180));
+        assertFalse(pool.isValidDuration(0));
+        assertFalse(pool.isValidDuration(1));
+        assertFalse(pool.isValidDuration(15));
+        assertFalse(pool.isValidDuration(90 + 1));
+        assertFalse(pool.isValidDuration(type(uint16).max));
+    }
+
+    function test_borrowWithTerm_sets_term() public {
+        _setupBorrower();
+
+        uint40 before = uint40(block.timestamp);
+        vm.prank(bob);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 30);
+
+        (uint40 borrowedAt, uint16 durationDays, uint40 dueTimestamp) =
+            pool.getLoanTerm(bob, address(usdc));
+        assertEq(borrowedAt, before, "borrowedAt = tx timestamp");
+        assertEq(durationDays, 30, "duration = 30 days");
+        assertEq(dueTimestamp, before + 30 days, "due = borrowedAt + 30d");
+        assertFalse(pool.isLoanOverdue(bob, address(usdc)));
+    }
+
+    function test_borrowWithTerm_invalid_duration_reverts() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        vm.expectRevert("LP: invalid duration");
+        pool.borrowWithTerm(address(usdc), 10_000e6, 45);
+        vm.stopPrank();
+
+        // No debt was taken
+        assertEq(pool.getUserDebt(bob, address(usdc)), 0);
+    }
+
+    function test_borrowWithTerm_emits_event() public {
+        _setupBorrower();
+
+        uint40 before = uint40(block.timestamp);
+        vm.prank(bob);
+        vm.expectEmit(true, true, false, true, address(pool));
+        emit ILendingPool.LoanTermSet(bob, address(usdc), 10_000e6, 14, before + 14 days);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 14);
+    }
+
+    function test_full_repay_clears_term() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 7);
+        pool.repay(address(usdc), 10_000e6, "");
+        vm.stopPrank();
+
+        (, uint16 durationDays, uint40 dueTimestamp) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(durationDays), 0, "term cleared");
+        assertEq(uint256(dueTimestamp), 0, "no due date");
+        assertFalse(pool.isLoanOverdue(bob, address(usdc)));
+    }
+
+    function test_partial_repay_keeps_term() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 7);
+        pool.repay(address(usdc), 5_000e6, "");
+        vm.stopPrank();
+
+        (, uint16 durationDays,) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(durationDays), 7, "term kept while debt remains");
+    }
+
+    function test_term_overdue_after_duration() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 7);
+        vm.stopPrank();
+
+        assertFalse(pool.isLoanOverdue(bob, address(usdc)));
+
+        vm.warp(block.timestamp + 7 days + 1 seconds);
+        assertTrue(pool.isLoanOverdue(bob, address(usdc)));
+
+        // Overdue loans can still be repaid in full
+        vm.startPrank(bob);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.repay(address(usdc), type(uint256).max, "");
+        vm.stopPrank();
+
+        assertFalse(pool.isLoanOverdue(bob, address(usdc)));
+    }
+
+    function test_borrowWithTerm_overwrites_previous_term() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        pool.borrowWithTerm(address(usdc), 10_000e6, 7);
+        pool.borrowWithTerm(address(usdc), 5_000e6, 180);
+        vm.stopPrank();
+
+        (uint40 borrowedAt2, uint16 durationDays, uint40 dueTimestamp) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(durationDays), 180, "latest term wins");
+        assertEq(dueTimestamp, borrowedAt2 + 180 days, "due from latest borrow");
+    }
+
+    function test_liquidation_full_clear_clears_term() public {
+        _setupBorrower();
+        // Extra USDC liquidity so bob can borrow at max LTV
+        usdc.mint(alice, 100_000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100_000e6);
+        pool.supply(address(usdc), 100_000e6);
+        vm.stopPrank();
+
+        // One liquidation clears the whole position when closeFactor = 100%
+        pool.setRiskParams(address(usdc), 0, 0, 500, 1000, 10_000, 10_000_000e6, 8_000_000e6);
+
+        // Bob borrows at max LTV, then price drops so HF < 1
+        vm.startPrank(bob);
+        pool.borrowWithTerm(address(usdc), 66_500e6, 30); // 70% of $95k
+        vm.stopPrank();
+        oracle.setPrice(address(cirBTC), BTC_PRICE * 75 / 100); // -25% => HF ~ 0.936 < 1
+
+        (, uint16 beforeDays,) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(beforeDays), 30, "term set before liquidation");
+
+        vm.startPrank(carol);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.liquidate(bob, address(usdc), address(cirBTC), type(uint256).max);
+        vm.stopPrank();
+
+        assertEq(pool.getUserDebt(bob, address(usdc)), 0, "debt fully liquidated");
+        (, uint16 afterDays, uint40 afterDue) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(afterDays), 0, "term cleared by liquidation");
+        assertEq(uint256(afterDue), 0);
+    }
+
+    function test_partial_liquidation_keeps_term() public {
+        _setupBorrower();
+
+        vm.startPrank(bob);
+        pool.borrowWithTerm(address(usdc), 30_000e6, 30);
+        vm.stopPrank();
+        oracle.setPrice(address(cirBTC), BTC_PRICE * 38 / 100); // HF ~ 0.94 < 1
+
+        // Default closeFactor 50%: half the debt is repaid, half remains
+        vm.startPrank(carol);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.liquidate(bob, address(usdc), address(cirBTC), type(uint256).max);
+        vm.stopPrank();
+
+        assertEq(pool.getUserDebt(bob, address(usdc)), 15_000e6, "half the debt remains");
+        (, uint16 durationDays,) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(durationDays), 30, "term kept while debt remains");
+    }
+
+    function test_plain_borrow_has_no_term() public {
+        _setupBorrower();
+
+        vm.prank(bob);
+        pool.borrow(address(usdc), 10_000e6);
+
+        (, uint16 durationDays, uint40 dueTimestamp) = pool.getLoanTerm(bob, address(usdc));
+        assertEq(uint256(durationDays), 0, "plain borrow is open-ended");
+        assertEq(uint256(dueTimestamp), 0);
+        assertFalse(pool.isLoanOverdue(bob, address(usdc)));
     }
 }

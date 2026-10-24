@@ -48,6 +48,9 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     mapping(address => MarketConfig) private _configs;
     mapping(address => MarketState)  private _states;
 
+    /// @dev user => asset => active fixed-term metadata (set by borrowWithTerm)
+    mapping(address => mapping(address => LoanTerm)) private _loanTerms;
+
     /// @dev user => asset => pending collateral to claim (blocklist protection)
     mapping(address => mapping(address => uint256)) public pendingCollateral;
 
@@ -324,6 +327,14 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 burnedShares  = sToken(cfg.sToken).burn(owner, amountRay, state.supplyIndex);
         state.totalSupplyShares -= burnedShares;
 
+        // LTV borrow-power check: withdrawing collateral must not leave debt above
+        // the remaining collateral's LTV. This is stricter than (and separate from)
+        // the liquidation-threshold health factor checked below.
+        uint256 remainingDebt = _totalDebtOf(owner);
+        if (remainingDebt > 0) {
+            require(remainingDebt <= _borrowPower(owner), "LP: exceeds borrow power (LTV)");
+        }
+
         // Liquidity check: ensure pool has enough cash
         uint256 totalDebtRay = state.totalDebtShares.mulRayUp(state.borrowIndex);
         uint256 totalSupRay  = state.totalSupplyShares.mulRayDown(state.supplyIndex);
@@ -359,6 +370,23 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
     {
         require(onBehalfOf != address(0), "LP: zero onBehalfOf");
         _borrow(asset, amount, onBehalfOf, msg.sender);
+    }
+
+    /// @notice Borrow `amount` of `asset` with a fixed term chosen from the
+    ///         predefined durations (7/14/30/60/90/180 days). The term is
+    ///         metadata only: repayment is allowed any time, and liquidation
+    ///         still depends solely on the health factor. A new borrowWithTerm
+    ///         overwrites any previous term; fully repaying the debt clears it.
+    function borrowWithTerm(address asset, uint256 amount, uint16 durationDays)
+        external
+        override
+        nonReentrant
+    {
+        require(isValidDuration(durationDays), "LP: invalid duration");
+        _borrow(asset, amount, msg.sender, msg.sender);
+        uint40 due = uint40(block.timestamp + uint256(durationDays) * 1 days);
+        _loanTerms[msg.sender][asset] = LoanTerm({ borrowedAt: uint40(block.timestamp), durationDays: durationDays });
+        emit LoanTermSet(msg.sender, asset, amount, durationDays, due);
     }
 
     function _borrow(address asset, uint256 amount, address debtor, address recipient) internal {
@@ -456,6 +484,11 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         uint256 burnedShares = DebtToken(cfg.debtToken).burn(debtor, amountRay, state.borrowIndex);
         state.totalDebtShares -= burnedShares;
 
+        // Debt fully cleared — drop any fixed-term metadata for this position.
+        if (DebtToken(cfg.debtToken).debtSharesOf(debtor) == 0) {
+            if (_loanTerms[debtor][asset].durationDays != 0) delete _loanTerms[debtor][asset];
+        }
+
         emit Repay(debtor, asset, amount, burnedShares, memo);
     }
 
@@ -539,6 +572,11 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         // 6. Burn sTokens from borrower
         uint256 burnedCollShares = sToken(collCfg.sToken).burn(borrower, seizeRay, collState.supplyIndex);
         collState.totalSupplyShares -= burnedCollShares;
+
+        // 7. Debt fully cleared — drop any fixed-term metadata for this position.
+        if (DebtToken(debtCfg.debtToken).debtSharesOf(borrower) == 0) {
+            if (_loanTerms[borrower][debtAsset].durationDays != 0) delete _loanTerms[borrower][debtAsset];
+        }
     }
 
     function _computeSeizeRay(
@@ -603,6 +641,32 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
         return DecimalNormalizer.fromRay(dShares.mulRayUp(state.borrowIndex), cfg.decimals, true);
     }
 
+    /// @notice Allowed fixed terms in days: 7, 14, 30, 60, 90, 180.
+    function isValidDuration(uint16 durationDays) public pure override returns (bool) {
+        return durationDays == 7 || durationDays == 14 || durationDays == 30
+            || durationDays == 60 || durationDays == 90 || durationDays == 180;
+    }
+
+    /// @notice Active fixed-term metadata for `user`'s debt in `asset`.
+    ///         dueTimestamp == 0 means no term set (open-ended borrow or no debt).
+    function getLoanTerm(address user, address asset)
+        external
+        view
+        override
+        returns (uint40 borrowedAt, uint16 durationDays, uint40 dueTimestamp)
+    {
+        LoanTerm storage t = _loanTerms[user][asset];
+        uint40 due = t.durationDays == 0 ? 0 : t.borrowedAt + uint40(t.durationDays) * 1 days;
+        return (t.borrowedAt, t.durationDays, due);
+    }
+
+    /// @notice True when a fixed term exists and its due date has passed.
+    ///         Overdue loans still repay any time; liquidation remains HF-driven.
+    function isLoanOverdue(address user, address asset) external view override returns (bool) {
+        LoanTerm storage t = _loanTerms[user][asset];
+        return t.durationDays > 0 && block.timestamp > t.borrowedAt + uint40(t.durationDays) * 1 days;
+    }
+
     function getUserSupply(address user, address asset) external view override returns (uint256) {
         MarketConfig storage cfg   = _configs[asset];
         MarketState  storage state = _states[asset];
@@ -620,6 +684,51 @@ contract LendingPool is ILendingPool, SteadFiAccessControl {
 
     function getMarketList() external view returns (address[] memory) {
         return marketList;
+    }
+
+    /// @notice Maximum total debt (in Ray USD) the user may carry at current prices.
+    function getBorrowPower(address user) external view override returns (uint256) {
+        return _borrowPower(user);
+    }
+
+    /// @notice Total debt across all markets in Ray USD.
+    function getTotalDebt(address user) external view override returns (uint256) {
+        return _totalDebtOf(user);
+    }
+
+    /// @notice Total supply and total debt for a market, in the token's native decimals.
+    function getMarketTotals(address asset)
+        external
+        view
+        override
+        returns (uint256 totalSupply, uint256 totalDebt)
+    {
+        MarketConfig storage cfg   = _configs[asset];
+        MarketState  storage state = _states[asset];
+        totalSupply = DecimalNormalizer.fromRay(
+            state.totalSupplyShares.mulRayDown(state.supplyIndex), cfg.decimals, false
+        );
+        totalDebt = DecimalNormalizer.fromRay(
+            state.totalDebtShares.mulRayUp(state.borrowIndex), cfg.decimals, true
+        );
+    }
+
+    /// @notice Current per-second borrow and supply rates in Ray, from the market's IRM.
+    function getMarketRates(address asset)
+        external
+        view
+        override
+        returns (uint256 borrowRatePerSecond, uint256 supplyRatePerSecond)
+    {
+        MarketConfig storage cfg   = _configs[asset];
+        MarketState  storage state = _states[asset];
+        uint256 totalSupRay  = state.totalSupplyShares.mulRayDown(state.supplyIndex);
+        uint256 totalDebtRay = state.totalDebtShares.mulRayUp(state.borrowIndex);
+        if (totalDebtRay == 0) return (0, 0);
+
+        IInterestRateModel irm = IInterestRateModel(cfg.interestModel);
+        borrowRatePerSecond = irm.getBorrowRatePerSecond(totalSupRay, totalDebtRay);
+        supplyRatePerSecond = irm.getSupplyRatePerSecond(totalSupRay, totalDebtRay, cfg.reserveFactor);
     }
 
     // -------------------------------------------------------------------------

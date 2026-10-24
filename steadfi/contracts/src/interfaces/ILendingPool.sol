@@ -31,9 +31,16 @@ interface ILendingPool {
         uint256 supplyIndex;           // Cumulative supply interest index (Ray)
         uint256 borrowIndex;           // Cumulative borrow interest index (Ray)
         uint256 totalSupplyShares;     // Total sToken shares (Ray normalized)
-        uint256 totalDebtShares;       // Total debt shares (Ray normalized)
+        uint256 totalDebtShares;        // Total debt shares (Ray normalized)
         uint256 lastAccrualTimestamp;  // Last time interest was accrued
         uint256 reservesRay;           // Protocol reserve accrued (Ray)
+    }
+
+    /// @dev Fixed-term loan metadata for a (user, asset) borrow position.
+    ///      Set by borrowWithTerm; cleared when the debt is fully repaid or liquidated.
+    struct LoanTerm {
+        uint40 borrowedAt;    // Timestamp of the latest borrowWithTerm call
+        uint16 durationDays;  // Chosen term length in days (7/14/30/60/90/180)
     }
 
     // -------------------------------------------------------------------------
@@ -45,6 +52,7 @@ interface ILendingPool {
     event Withdraw(address indexed user, address indexed asset, uint256 amount, uint256 shares);
     event Borrow(address indexed user, address indexed asset, uint256 amount, uint256 debtShares);
     event Repay(address indexed user, address indexed asset, uint256 amount, uint256 debtShares, bytes memo);
+    event LoanTermSet(address indexed user, address indexed asset, uint256 amount, uint16 durationDays, uint40 dueTimestamp);
     event Liquidate(
         address indexed liquidator,
         address indexed borrower,
@@ -70,6 +78,10 @@ interface ILendingPool {
     function supplyOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
     function withdraw(address asset, uint256 amount) external;
     function borrow(address asset, uint256 amount) external;
+    /// @notice Borrow with a fixed term (7/14/30/60/90/180 days). Records loan
+    ///         maturity metadata on-chain; repayment is still permitted any time
+    ///         before or after the due date. Overwrites any previous term.
+    function borrowWithTerm(address asset, uint256 amount, uint16 durationDays) external;
     /// @notice Borrow on behalf of another address (used by BatchRouter).
     ///         Health factor checked against `onBehalfOf`'s collateral. Funds sent to caller.
     function borrowOnBehalfOf(address asset, uint256 amount, address onBehalfOf) external;
@@ -94,8 +106,28 @@ interface ILendingPool {
     function getSupplyIndex(address asset) external view returns (uint256);
     function getBorrowIndex(address asset) external view returns (uint256);
     function getMarketConfig(address asset) external view returns (MarketConfig memory);
+    /// @notice Whether `durationDays` is one of the allowed terms (7/14/30/60/90/180).
+    function isValidDuration(uint16 durationDays) external view returns (bool);
+    /// @notice Term metadata for `user`'s debt in `asset`.
+    ///         dueTimestamp == 0 means no active term (open-ended or no debt).
+    function getLoanTerm(address user, address asset)
+        external
+        view
+        returns (uint40 borrowedAt, uint16 durationDays, uint40 dueTimestamp);
+    /// @notice True when a term exists and its due date has passed.
+    function isLoanOverdue(address user, address asset) external view returns (bool);
+
+    /// @notice Replace the oracle used by a market (RISK_ADMIN only).
+    function setOracle(address asset, address oracle) external;
     function getMarketState(address asset) external view returns (MarketState memory);
     function getUserDebt(address user, address asset) external view returns (uint256);
     function getUserSupply(address user, address asset) external view returns (uint256);
     function getUtilization(address asset) external view returns (uint256);
+    function getBorrowPower(address user) external view returns (uint256);
+    function getTotalDebt(address user) external view returns (uint256);
+    function getMarketTotals(address asset) external view returns (uint256 totalSupply, uint256 totalDebt);
+    function getMarketRates(address asset)
+        external
+        view
+        returns (uint256 borrowRatePerSecond, uint256 supplyRatePerSecond);
 }
