@@ -6,10 +6,14 @@ import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight, ArrowSquareOut } from '@phosphor-icons/react'
 import { useAccount, usePublicClient } from 'wagmi'
-import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI } from '../lib/steadfi'
+import type { Log, AbiEvent } from 'viem'
+import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI, POOL_DEPLOY_BLOCK, ARC_TESTNET_CHAIN_ID } from '../lib/steadfi'
 import { formatUnits, hexToBytes } from 'viem'
 
-const HISTORY_LOOKBACK = 100_000n
+/** Arc's RPC rejects eth_getLogs ranges above ~10k blocks — chunk at 5k. */
+const LOG_CHUNK = 5_000n
+/** Small concurrency so we stay well under the RPC's rate limits. */
+const CONCURRENCY = 4
 
 type TxType = 'Supply' | 'Borrow' | 'Repay' | 'Withdraw'
 
@@ -43,7 +47,7 @@ const FILTER_OPTIONS: { label: string; value: TxType | 'all' }[] = [
 
 export default function History() {
   const { address, isConnected } = useAccount()
-  const publicClient = usePublicClient()
+  const publicClient = usePublicClient({ chainId: ARC_TESTNET_CHAIN_ID })
   const [filter, setFilter] = useState<TxType | 'all'>('all')
   const [txs, setTxs] = useState<TxRecord[]>([])
   const [loading, setLoading] = useState(false)
@@ -53,41 +57,42 @@ export default function History() {
 
     let cancelled = false
 
+    /** Fetch one event type across the pool's full history in 5k-block chunks. */
+    async function fetchEventChunked(event: AbiEvent): Promise<Log[]> {
+      const head = await publicClient!.getBlockNumber()
+      const chunks: { from: bigint; to: bigint }[] = []
+      for (let s = POOL_DEPLOY_BLOCK; s <= head; s += LOG_CHUNK) {
+        chunks.push({ from: s, to: s + LOG_CHUNK - 1n > head ? head : s + LOG_CHUNK - 1n })
+      }
+
+      const logs: Log[] = []
+      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        if (cancelled) return logs
+        const batch = chunks.slice(i, i + CONCURRENCY)
+        const results = await Promise.all(
+          batch.map(({ from, to }) =>
+            publicClient!.getLogs({
+              address: CONTRACTS.LendingPool,
+              event,
+              args: { user: address },
+              fromBlock: from,
+              toBlock: to,
+            })
+          )
+        )
+        for (const r of results) logs.push(...r)
+      }
+      return logs
+    }
+
     async function fetchLogs() {
       if (!cancelled) setLoading(true)
       try {
-        const blockNumber = await publicClient!.getBlockNumber()
-        const fromBlock = blockNumber > HISTORY_LOOKBACK ? blockNumber - HISTORY_LOOKBACK : 0n
-
         const [supplyLogs, borrowLogs, repayLogs, withdrawLogs] = await Promise.all([
-          publicClient!.getLogs({
-            address: CONTRACTS.LendingPool,
-            event: LENDING_POOL_EVENTS_ABI[0],
-            args: { user: address },
-            fromBlock,
-            toBlock: blockNumber,
-          }),
-          publicClient!.getLogs({
-            address: CONTRACTS.LendingPool,
-            event: LENDING_POOL_EVENTS_ABI[1],
-            args: { user: address },
-            fromBlock,
-            toBlock: blockNumber,
-          }),
-          publicClient!.getLogs({
-            address: CONTRACTS.LendingPool,
-            event: LENDING_POOL_EVENTS_ABI[2],
-            args: { user: address },
-            fromBlock,
-            toBlock: blockNumber,
-          }),
-          publicClient!.getLogs({
-            address: CONTRACTS.LendingPool,
-            event: LENDING_POOL_EVENTS_ABI[3],
-            args: { user: address },
-            fromBlock,
-            toBlock: blockNumber,
-          }),
+          fetchEventChunked(LENDING_POOL_EVENTS_ABI[0] as unknown as AbiEvent),
+          fetchEventChunked(LENDING_POOL_EVENTS_ABI[1] as unknown as AbiEvent),
+          fetchEventChunked(LENDING_POOL_EVENTS_ABI[2] as unknown as AbiEvent),
+          fetchEventChunked(LENDING_POOL_EVENTS_ABI[3] as unknown as AbiEvent),
         ])
 
         if (cancelled) return
@@ -158,7 +163,7 @@ export default function History() {
       <div>
         <h1 className="text-2xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>History</h1>
         <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-          Your onchain transaction history — last 100,000 blocks. Repayment memos stored onchain.
+          Your onchain transaction history — since the current pool deployment. Repayment memos stored onchain.
         </p>
       </div>
 
@@ -193,7 +198,7 @@ export default function History() {
             <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">Loading history…</p>
           ) : filtered.length === 0 ? (
             <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
-              No transactions found in the last 100,000 blocks.
+              No transactions found.
             </p>
           ) : (
             <div className="divide-y divide-[var(--color-border)]">

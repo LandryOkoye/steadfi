@@ -24,32 +24,61 @@ This is the **project memory** — what Arc Studio remembers about building this
 
 ## SteadFi Phase 1 — Completed 2026-10-22
 
-### All Arc Testnet Deployments (Phase 1)
+### All Arc Testnet Deployments (Phase 1 — live redeploy 2026-10-24, loan durations + oracle resilience)
 | Contract | Address | Explorer |
 |---|---|---|
-| Timelock | `0x84393560Bc91a1C2eDea435dfdb704Ad17df0886` | https://explorer.testnet.arc.io/address/0x84393560Bc91a1C2eDea435dfdb704Ad17df0886 |
-| LendingPool | `0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B` | https://explorer.testnet.arc.io/address/0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B |
-| IRM_Stable | `0x041A09a5e8aCF1c618b2C7b76F560bE9D5c179A9` | https://explorer.testnet.arc.io/address/0x041A09a5e8aCF1c618b2C7b76F560bE9D5c179A9 |
-| IRM_Collateral | `0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F` | https://explorer.testnet.arc.io/address/0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F |
-| PythOracleAdapter | `0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433` | https://explorer.testnet.arc.io/address/0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433 |
-| sUSDC | `0x2BCF675A744d568107b1F67AC63f1640770E72AE` | https://explorer.testnet.arc.io/address/0x2BCF675A744d568107b1F67AC63f1640770E72AE |
-| dUSDC | `0x31D611C9A8369bB05E25a4ADcFc3D393BeD77884` | https://explorer.testnet.arc.io/address/0x31D611C9A8369bB05E25a4ADcFc3D393BeD77884 |
-| sEURC | `0x3AF561fF92Ee6dD333484ED283dB0645c69Cf9d4` | https://explorer.testnet.arc.io/address/0x3AF561fF92Ee6dD333484ED283dB0645c69Cf9d4 |
-| dEURC | `0x879C8451591688b0a43052aC71A3BA7524967e92` | https://explorer.testnet.arc.io/address/0x879C8451591688b0a43052aC71A3BA7524967e92 |
-| sCIRBTC | `0xfE1bb221078673c3CB6243868FB88E1E6eaCD31C` | https://explorer.testnet.arc.io/address/0xfE1bb221078673c3CB6243868FB88E1E6eaCD31C |
-| dCIRBTC | `0x06ddD42c7b9CAADa0783C7966B86b9C04D7c3364` | https://explorer.testnet.arc.io/address/0x06ddD42c7b9CAADa0783C7966B86b9C04D7c3364 |
-| sWETH | `0x8b16a82f9F2E991856A8Ec133e791BDDB7e6ED3e` | https://explorer.testnet.arc.io/address/0x8b16a82f9F2E991856A8Ec133e791BDDB7e6ED3e |
-| dWETH | `0xAD7a658FeB5dbaDe32a2347ec7997D334Fc76D56` | https://explorer.testnet.arc.io/address/0xAD7a658FeB5dbaDe32a2347ec7997D334Fc76D56 |
+| Timelock | `0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947` | https://explorer.testnet.arc.io/address/0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947 |
+| LendingPool | `0x252E8662C945e340195B35816a3f9259CA264e8C` | https://explorer.testnet.arc.io/address/0x252E8662C945e340195B35816a3f9259CA264e8C |
+| IRM_Stable | `0xA4eCC81c1566abFc55355ba8ED2725400E41D1e6` | https://explorer.testnet.arc.io/address/0xA4eCC81c1566abFc55355ba8ED2725400E41D1e6 |
+| IRM_Collateral | `0xFB64d2c8dac257F7c29a0A7fD7A4FA8d668DF7C1` | https://explorer.testnet.arc.io/address/0xFB64d2c8dac257F7c29a0A7fD7A4FA8d668DF7C1 |
+| PythOracleAdapter (Pyth Pro) | `0x42c69A87e59Cf8Dd845df2197d569745E7bb5730` | https://explorer.testnet.arc.io/address/0x42c69A87e59Cf8Dd845df2197d569745E7bb5730 |
+| sUSDC | `0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C` | https://explorer.testnet.arc.io/address/0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C |
+| dUSDC | `0x36F1dF20B6f61ae840B7ACf5B6B6D2E14Dd3e07E` | https://explorer.testnet.arc.io/address/0x36F1dF20B6f61ae840B7ACf5B6B6D2E14Dd3e07E |
+| sEURC | `0x781CD39D22bD8511DDB453BF0CDc717F54A53d11` | https://explorer.testnet.arc.io/address/0x781CD39D22bD8511DDB453BF0CDc717F54A53d11 |
+| dEURC | `0xA6634Fd478583a15eE6487d15f66Fe8D1665187E` | https://explorer.testnet.arc.io/address/0xA6634Fd478583a15eE6487d15f66Fe8D1665187E |
+| sCIRBTC | `0x37bEE970fBA42c25f766dB7eE5e7fF2D4EF79063` | https://explorer.testnet.arc.io/address/0x37bEE970fBA42c25f766dB7eE5e7fF2D4EF79063 |
+| dCIRBTC | `0xC7ec43E4A867F3A0217248718679CeAa08e2e6De` | https://explorer.testnet.arc.io/address/0xC7ec43E4A867F3A0217248718679CeAa08e2e6De |
+| sWETH | `0x9F48c6c273A23f9e3Cc141BFFfD796EcdA1Fe7D4` | https://explorer.testnet.arc.io/address/0x9F48c6c273A23f9e3Cc141BFFfD796EcdA1Fe7D4 |
+| dWETH | `0x0Be718E5F962Ea4b84defe0ec46e787376BE1832` | https://explorer.testnet.arc.io/address/0x0Be718E5F962Ea4b84defe0ec46e787376BE1832 |
+
+Pool deployed at block `68770501` (`POOL_DEPLOY_BLOCK` in `src/lib/steadfi.ts`).
+
+### Loan durations (new 2026-10-24)
+- `borrowWithTerm(asset, amount, durationDays)` — predefined terms **7/14/30/60/90/180 days** (`isValidDuration`).
+- Term metadata on-chain: `getLoanTerm(user, asset) → (borrowedAt, durationDays, dueTimestamp)`, `isLoanOverdue`.
+- Repay any time (no penalty); liquidation remains purely HF-driven. Full repay or full liquidation clears the term.
+
+### Oracle resilience (fixed 2026-10-24)
+- The EUR/USD Lazer feed went dormant for hours; the old adapter reverted the WHOLE `updatePrices` batch when one feed was stale → all prices froze.
+- New adapter **skips** stale / wide-confidence feeds and still applies fresh ones (`updated > 0` still required).
+- Keeper (`steadfi/keeper/src/keeper.ts`) defaults updated; survives transient RPC/API errors without exiting.
+
+### Frontend hardening (fixed 2026-10-24)
+- All wagmi reads/writes pinned to `chainId 5042002` — a wallet on the wrong network can no longer silently produce empty balances/failed txs.
+- `WrongNetworkBanner` with one-click switch shown when connected on another chain.
+- History scans from `POOL_DEPLOY_BLOCK` in ≤5,000-block chunks (Arc RPC rejects larger `eth_getLogs` ranges); previously a single 100k-block query always failed silently.
 
 ### Collateral model
 - **cirBTC** and **WETH** only: `collateralEnabled=true`, non-zero LTV/liqThreshold
 - **USDC** and **EURC**: lend-and-borrow only, `collateralEnabled=false`, `ltv=0`, `liqThreshold=0`
 
-### Oracle
-- Pyth Network on Arc Testnet: `0x2880aB155794e7179c9eE2e38200202908C17B43`
-- BTC/USD: `0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43`
-- ETH/USD: `0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace`
-- EUR/USD: `0xa995d00bb36a63cef7fd2c287dc105fc8f3d93779f062f09551b0af3e81ec30b`
+### Oracle — Pyth Pro (Lazer)
+- Pyth Core on Arc (`0x2880aB…7B43`) is stale (v1.4.5-alpha, PNAU-only Hermes) — **do not use**.
+- Pyth Pro verifier: `0xACeA761c27A909d4D3895128EBe6370FDE2dF481` (`verification_fee() = 1 wei`)
+- Adapter: `0xb0e392899a9446F22Fc6bbe49c651c013fA35174` (stores price + publishTime, `updatePrices(bytes)`)
+- Feed IDs: BTC/USD=`1`, ETH/USD=`2`, EUR/USD=`327`; maxAge 300s
+- REST: `POST https://pyth-lazer.dourolabs.app/v1/latest_price` with `Authorization: Bearer $PYTH_API_KEY`
+- Keeper (`steadfi/keeper/src/keeper.ts`) refreshes prices and liquidates HF<1; supports `RUN_ONCE=1`
+
+### E2E proof txs (2026-10-23, on the superseded pool 0x8016C2… — kept for reference)
+- Supply 5 USDC: `0x8520975bfed646dc74007ae305cea27316941581e31b3c0dfa530f8e89618a42`
+- Supply 0.0001 cirBTC: `0x942e907f5092d37de1205b9f0261cc60d59246bd318ba115cc0918f7c8c5a19f`
+- Borrow 5 USDC: `0x38e54f6e2bb71b4fb90bd86c1a4ff8d120edf1c7ada4d95e837b79bbb83ac29b`
+- Repay all (memo): `0x1a8f449399bec9abf340a4a14d4404acdd83abc0d503065c4d053f05782737d9`
+- Withdraw 5 USDC: `0xff2cd22d6ccf00fa58f719b02e03094664c58dfcd81e73288bc5c7cfe5a023b6`
+- Withdraw 0.0001 cirBTC: `0x672ddb4e616f05cc10e2a55feafffda1cdda3238c8cec5027cbb4256202ce142`
+- Liquidation (keeper): `0xa747283f483e8ca567da4b6bc0de34b5403bc904934d2ebed8078a4b36e688e9`
+- Temporary risk change + restore: `0x1aec57bd8307af0e5e90a21fbde40916c6f25c2625cb2ea65cceee60b314ee59` / `0x6032399411c2352104be0d4fc8d2e6e298654f6d333397896944c6fecb964b8d`
 
 ### Source files
 - `src/lib/steadfi.ts` — all deployed addresses + ABIs

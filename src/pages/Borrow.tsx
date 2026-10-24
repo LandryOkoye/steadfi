@@ -1,6 +1,8 @@
 /**
  * Borrow — borrow USDC or EURC against cirBTC/WETH collateral.
  * Health factor, borrow power, prices and rates are all live on-chain reads.
+ * Loan duration: predefined terms (7/14/30/60/90/180 days) chosen at borrow
+ * time; the due date is recorded on-chain via borrowWithTerm.
  */
 import { useState } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
@@ -13,7 +15,7 @@ import { toast } from 'sonner'
 import { parseUnits } from 'viem'
 import { useAccount } from 'wagmi'
 import {
-  useUserPosition, useBorrow, useMarketData, useOraclePrices,
+  useUserPosition, useBorrow, useMarketData, useOraclePrices, LOAN_DURATIONS_DAYS, useNowMs,
 } from '../hooks/useSteadFi'
 import {
   BORROW_TOKENS, COLLATERAL_TOKENS, TOKENS, TokenSymbol, formatToken, txUrl,
@@ -24,6 +26,7 @@ export default function Borrow() {
   const { isConnected } = useAccount()
   const [asset, setAsset] = useState<TokenSymbol>('USDC')
   const [amount, setAmount] = useState('')
+  const [durationDays, setDurationDays] = useState<number>(30)
   const [busy, setBusy] = useState(false)
 
   const position = useUserPosition()
@@ -61,6 +64,16 @@ export default function Borrow() {
     : position.healthFactor
 
   const { borrow } = useBorrow()
+  const nowMs = useNowMs()
+
+  // Due date + estimated interest for the selected term (simple APR projection).
+  const dueDate = durationDays > 0 && nowMs > 0
+    ? new Date(nowMs + durationDays * 86_400_000)
+    : null
+  const borrowApr = market?.borrowApr ?? 0
+  const estInterestUsd = numAmount > 0 && price18
+    ? usdFromTokenAmount(amountBig, decimals, price18) * (borrowApr / 100) * (durationDays / 365)
+    : 0
 
   async function handleBorrow() {
     if (!numAmount || !amountBig) return
@@ -69,12 +82,15 @@ export default function Borrow() {
       return
     }
     setBusy(true)
+    const due = new Date(Date.now() + durationDays * 86_400_000)
     try {
-      const hash = await borrow(asset, amountBig)
+      const hash = await borrow(asset, amountBig, durationDays)
       toast.success(`Borrowed ${amount} ${asset}`, {
         description: (
-          <a href={txUrl(hash)} target="_blank" rel="noreferrer"
-             className="underline text-xs">View on explorer</a>
+          <span className="text-xs">
+            {durationDays > 0 && `Term: ${durationDays} days · due ${due.toLocaleDateString()} · `}
+            <a href={txUrl(hash)} target="_blank" rel="noreferrer" className="underline">View on explorer</a>
+          </span>
         ),
       })
       setAmount('')
@@ -183,6 +199,31 @@ export default function Borrow() {
           id="borrow-amount"
         />
 
+        <div className="mt-5">
+          <p className="text-xs font-medium text-[var(--color-muted-foreground)] mb-2">
+            Loan duration
+          </p>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2" role="group" aria-label="Loan duration">
+            {LOAN_DURATIONS_DAYS.map(d => (
+              <button
+                key={d}
+                onClick={() => setDurationDays(d)}
+                className={`py-2 rounded-xl border text-sm font-semibold transition-base cursor-pointer
+                  ${durationDays === d
+                    ? 'border-[var(--color-primary)] bg-[var(--color-muted)] text-[var(--color-primary)]'
+                    : 'border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-primary)]'
+                  }`}
+                aria-pressed={durationDays === d}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-[var(--color-muted-foreground)] mt-2">
+            Repay any time before or after the due date. Liquidation depends only on your health factor.
+          </p>
+        </div>
+
         <div className="mt-5 space-y-0">
           <StatRow
             label="Borrow APR"
@@ -192,6 +233,18 @@ export default function Borrow() {
                 : <span className="text-[var(--color-warning)] mono">{market?.borrowApr.toFixed(2)}%</span>
             }
           />
+          {dueDate && (
+            <StatRow
+              label="Due date"
+              value={<span className="mono text-[var(--color-accent)]">{dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })} ({durationDays} days)</span>}
+            />
+          )}
+          {dueDate && numAmount > 0 && (
+            <StatRow
+              label={`Est. interest (${durationDays}d)`}
+              value={<span className="mono text-[var(--color-warning)]">≈ ${estInterestUsd.toFixed(2)}</span>}
+            />
+          )}
           <StatRow
             label="Available liquidity"
             value={

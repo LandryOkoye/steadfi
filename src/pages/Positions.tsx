@@ -5,9 +5,9 @@
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import StatRow from '../components/ui/StatRow'
 import HealthFactor from '../components/ui/HealthFactor'
-import { ArrowCircleDown, ArrowCircleUp, ShieldCheck, Warning } from '@phosphor-icons/react'
+import { ArrowCircleDown, ArrowCircleUp, ShieldCheck, Warning, CalendarBlank } from '@phosphor-icons/react'
 import { useAccount } from 'wagmi'
-import { useUserPosition, useMarketData, useOraclePrices, SYMBOLS } from '../hooks/useSteadFi'
+import { useUserPosition, useMarketData, useOraclePrices, useLoanTerm, useNowMs, SYMBOLS } from '../hooks/useSteadFi'
 import {
   TOKENS, TokenSymbol, formatToken, usdFromTokenAmount,
   COLLATERAL_TOKENS, BORROW_TOKENS,
@@ -15,6 +15,21 @@ import {
 
 function fmtUsd(v: number | null): string {
   return v === null ? '—' : `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+}
+
+/** Due date + overdue badge for a borrow position, or null if no active debt. */
+function LoanDueDate({ sym, hasDebt }: { sym: TokenSymbol; hasDebt: boolean }) {
+  const term = useLoanTerm(sym)
+  const nowMs = useNowMs()
+  if (!hasDebt || !term?.dueDate) return null
+  const due = new Date(term.dueDate)
+  const overdue = nowMs > 0 && nowMs > due.getTime()
+  return (
+    <span className={`ml-2 text-xs inline-flex items-center gap-1 ${overdue ? 'text-[var(--color-danger)] font-semibold' : 'text-[var(--color-accent)]'}`}>
+      <CalendarBlank size={11} aria-hidden="true" />
+      {overdue ? 'Overdue' : 'Due'} {due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+    </span>
+  )
 }
 
 export default function Positions() {
@@ -93,6 +108,7 @@ export default function Positions() {
       decimals: TOKENS[sym].decimals,
       usdValue: usdOf(sym, position.debts[sym]),
       apr: markets.find(m => m.symbol === sym)?.borrowApr ?? 0,
+      due: <LoanDueDate sym={sym} hasDebt={position.debts[sym] > 0n} />,
     }))
     .filter(p => p.debt > 0n)
 
@@ -207,6 +223,7 @@ export default function Positions() {
                         <span className="text-[var(--color-warning)] ml-2 text-xs">
                           {p.apr.toFixed(2)}% APR
                         </span>
+                        {p.due}
                       </span>
                     }
                   />
