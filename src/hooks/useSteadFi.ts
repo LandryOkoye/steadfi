@@ -4,11 +4,13 @@
  * PythOracleAdapter and rates from the market's interest-rate model.
  */
 
-import { useReadContract, useReadContracts, useAccount, useWriteContract } from 'wagmi'
+import { useReadContract, useReadContracts, useAccount, useWriteContract, useConfig } from 'wagmi'
+import { waitForTransactionReceipt } from 'wagmi/actions'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { parseUnits, toHex } from 'viem'
 import {
-  CONTRACTS, TOKENS, TokenSymbol, LENDING_POOL_ABI, ERC20_ABI, ORACLE_ABI,
+  CONTRACTS, TOKENS, TokenSymbol, LENDING_POOL_ABI, ERC20_ABI, ORACLE_ABI, IRM_ABI,
   RAY, rayToHf, MAX_UINT256, rayRateToApy, rayToPct,
   tokenAmountToNumber, usdFromTokenAmount, ARC_TESTNET_CHAIN_ID,
 } from '../lib/steadfi'
@@ -183,6 +185,110 @@ export function useMarketData(): MarketData[] {
   })
 }
 
+/**
+ * Borrow APR the market would charge once `extraDebt` (native units) is added,
+ * read from the market's on-chain interest-rate model. The live rate is 0%
+ * while nothing is borrowed, which hides what a new loan will actually cost.
+ * Returns null when the market has no supply (nothing can be borrowed).
+ */
+export function useProjectedBorrowApr(symbol: TokenSymbol, extraDebt: bigint): number | null {
+  const token = TOKENS[symbol]
+  const base = useReadContracts({
+    contracts: [
+      {
+        address: CONTRACTS.LendingPool,
+        abi: LENDING_POOL_ABI,
+        functionName: 'getMarketConfig' as const,
+        args: [token.address],
+        chainId: ARC_TESTNET_CHAIN_ID,
+      },
+      {
+        address: CONTRACTS.LendingPool,
+        abi: LENDING_POOL_ABI,
+        functionName: 'getMarketTotals' as const,
+        args: [token.address],
+        chainId: ARC_TESTNET_CHAIN_ID,
+      },
+    ],
+    query: { refetchInterval: 12_000 },
+  })
+
+  const cfg = base.data?.[0]?.status === 'success'
+    ? base.data[0].result as { interestModel: `0x${string}` }
+    : undefined
+  const totals = base.data?.[1]?.status === 'success'
+    ? base.data[1].result as readonly [bigint, bigint]
+    : undefined
+  const toRay = 10n ** BigInt(27 - token.decimals)
+  const supplyRay = totals ? totals[0] * toRay : 0n
+  const debtRay = totals ? (totals[1] + extraDebt) * toRay : 0n
+
+  const rate = useReadContract({
+    address: cfg?.interestModel,
+    abi: IRM_ABI,
+    functionName: 'getBorrowRatePerSecond',
+    args: [supplyRay, debtRay],
+    chainId: ARC_TESTNET_CHAIN_ID,
+    query: { enabled: !!cfg && supplyRay > 0n },
+  })
+
+  if (supplyRay === 0n || rate.data === undefined) return null
+  return rayRateToApy(rate.data)
+}
+
+/** Interest-rate model parameters (annual, as fractions) for the rate curve. */
+export interface RateModel { base: number; slope1: number; slope2: number; kink: number }
+
+export function useRateModel(symbol: TokenSymbol): RateModel | null {
+  const cfg = useReadContract({
+    address: CONTRACTS.LendingPool,
+    abi: LENDING_POOL_ABI,
+    functionName: 'getMarketConfig',
+    args: [TOKENS[symbol].address],
+    chainId: ARC_TESTNET_CHAIN_ID,
+  })
+  const irm = (cfg.data as { interestModel?: `0x${string}` } | undefined)?.interestModel
+  const params = useReadContracts({
+    contracts: (['baseRatePerYear', 'slope1PerYear', 'slope2PerYear', 'kink'] as const).map(fn => ({
+      address: irm, abi: IRM_ABI, functionName: fn, chainId: ARC_TESTNET_CHAIN_ID,
+    })),
+    allowFailure: false,
+    query: { enabled: !!irm },
+  })
+  if (!params.data) return null
+  const [base, slope1, slope2, kink] = (params.data as readonly bigint[]).map(v => Number(v) / 1e27)
+  return { base, slope1, slope2, kink }
+}
+
+/** Annual borrow rate (fraction) at utilization u (0..1); mirrors InterestRateModel. */
+export function borrowRateAt(m: RateModel, u: number): number {
+  return u <= m.kink
+    ? m.base + (u * m.slope1) / m.kink
+    : m.base + m.slope1 + ((u - m.kink) * m.slope2) / (1 - m.kink)
+}
+
+/**
+ * One-time borrow (origination) fee for a market, in basis points. The fee is
+ * added to the borrower's debt; they still receive the full amount. Pools
+ * deployed before the fee existed don't expose borrowFeeBps — treat as 0.
+ */
+export function useBorrowFee(symbol: TokenSymbol) {
+  const token = TOKENS[symbol]
+  const { data, isSuccess, isError } = useReadContract({
+    address: CONTRACTS.LendingPool,
+    abi: LENDING_POOL_ABI,
+    functionName: 'borrowFeeBps',
+    args: [token.address],
+    chainId: ARC_TESTNET_CHAIN_ID,
+    query: { refetchInterval: 60_000, retry: 1 },
+  })
+  const feeBps = isSuccess ? Number(data) : 0
+  /** Fee in native decimals for `amount`, rounded up like the contract. */
+  const feeFor = (amount: bigint) =>
+    feeBps === 0 ? 0n : (amount * BigInt(feeBps) + 9_999n) / 10_000n
+  return { feeBps, feeFor, loaded: isSuccess || isError }
+}
+
 // ── User position hook ────────────────────────────────────────────────────────
 
 export interface UserPosition {
@@ -190,9 +296,9 @@ export interface UserPosition {
   isHealthy: boolean
   supplies: Record<TokenSymbol, bigint>
   debts: Record<TokenSymbol, bigint>
-  /** Max total debt allowed, in Ray USD (1e18 = $1). */
+  /** Max total debt allowed, in Ray USD (1e27 = $1). */
   borrowPowerRay: bigint
-  /** Current total debt, in Ray USD. */
+  /** Current total debt, in Ray USD (1e27 = $1). */
   totalDebtRay: bigint
   loading: boolean
 }
@@ -256,12 +362,18 @@ export function useUserPosition(): UserPosition {
   const hfData = hfResult.data
   const totalDebtRay = summaryResults.data?.[1]?.result ?? 0n
   const hasDebt = totalDebtRay > 0n
-  const healthFactor = hfData && hasDebt ? rayToHf(hfData[0]) : null
   const isHealthy = hfData ? hfData[1] : true
 
   const supplies = Object.fromEntries(
     SYMBOLS.map((sym, i) => [sym, posResults.data?.[i * 2]?.result ?? 0n])
   ) as Record<TokenSymbol, bigint>
+
+  // With collateral but no debt the HF is unbounded (Infinity, shown as ∞);
+  // with neither there is no position (null).
+  const hasCollateral = SYMBOLS.some(sym => TOKENS[sym].collateralEnabled && supplies[sym] > 0n)
+  const healthFactor = hasDebt
+    ? (hfData ? rayToHf(hfData[0]) : null)
+    : (hasCollateral ? Infinity : null)
 
   const debts = Object.fromEntries(
     SYMBOLS.map((sym, i) => [sym, posResults.data?.[i * 2 + 1]?.result ?? 0n])
@@ -351,31 +463,52 @@ export function useLoanTerm(symbol: TokenSymbol): LoanTerm | null {
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Wait until a sent tx is mined, throw if it reverted, then refetch every
+ * contract read so balances/allowances/positions update immediately instead
+ * of on the next 12s poll (an approve followed by supply needs this).
+ */
+export function useConfirmTx() {
+  const config = useConfig()
+  const queryClient = useQueryClient()
+
+  return async (hash: `0x${string}`) => {
+    const receipt = await waitForTransactionReceipt(config, { hash, chainId: ARC_TESTNET_CHAIN_ID })
+    if (receipt.status !== 'success') throw new Error(`Transaction reverted: ${hash}`)
+    await queryClient.invalidateQueries()
+    return hash
+  }
+}
+
 export function useApprove() {
   const { writeContractAsync } = useWriteContract()
+  const confirm = useConfirmTx()
 
   return async (symbol: TokenSymbol, spender: `0x${string}`) => {
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: TOKENS[symbol].address,
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [spender, MAX_UINT256],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 }
 
 export function useSupply() {
   const { writeContractAsync, isPending } = useWriteContract()
+  const confirm = useConfirmTx()
 
   const supply = async (symbol: TokenSymbol, amount: bigint) => {
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
       functionName: 'supply',
       args: [TOKENS[symbol].address, amount],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 
   return { supply, isPending }
@@ -383,15 +516,17 @@ export function useSupply() {
 
 export function useWithdraw() {
   const { writeContractAsync, isPending } = useWriteContract()
+  const confirm = useConfirmTx()
 
   const withdraw = async (symbol: TokenSymbol, amount: bigint) => {
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
       functionName: 'withdraw',
       args: [TOKENS[symbol].address, amount],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 
   return { withdraw, isPending }
@@ -399,10 +534,11 @@ export function useWithdraw() {
 
 export function useBorrow() {
   const { writeContractAsync, isPending } = useWriteContract()
+  const confirm = useConfirmTx()
 
   /** `durationDays` 0 = open-ended borrow; otherwise one of LOAN_DURATIONS_DAYS. */
   const borrow = async (symbol: TokenSymbol, amount: bigint, durationDays: number = 0) => {
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
       functionName: durationDays > 0 ? 'borrowWithTerm' : 'borrow',
@@ -412,6 +548,7 @@ export function useBorrow() {
           : [TOKENS[symbol].address, amount],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 
   return { borrow, isPending }
@@ -419,18 +556,20 @@ export function useBorrow() {
 
 export function useRepay() {
   const { writeContractAsync, isPending } = useWriteContract()
+  const confirm = useConfirmTx()
 
   const repay = async (symbol: TokenSymbol, amount: bigint, memo: string = '') => {
     const memoBytes: `0x${string}` = memo
       ? toHex(new TextEncoder().encode(memo))
       : '0x'
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
       functionName: 'repay',
       args: [TOKENS[symbol].address, amount, memoBytes],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 
   return { repay, isPending }
@@ -438,6 +577,7 @@ export function useRepay() {
 
 export function useLiquidate() {
   const { writeContractAsync, isPending } = useWriteContract()
+  const confirm = useConfirmTx()
 
   const liquidate = async (
     borrower: `0x${string}`,
@@ -445,13 +585,14 @@ export function useLiquidate() {
     collateralSymbol: TokenSymbol,
     debtAmount: bigint
   ) => {
-    return writeContractAsync({
+    const hash = await writeContractAsync({
       address: CONTRACTS.LendingPool,
       abi: LENDING_POOL_ABI,
       functionName: 'liquidate',
       args: [borrower, TOKENS[debtSymbol].address, TOKENS[collateralSymbol].address, debtAmount],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
+    return confirm(hash)
   }
 
   return { liquidate, isPending }
