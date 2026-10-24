@@ -216,6 +216,13 @@ contract DeployPhase1 is Script {
         }));
 
         // ------------------------------------------------------------------
+        // 9b. Protocol revenue: 0.5% one-time borrow (origination) fee,
+        //     added to the borrower's debt and credited to reserves.
+        // ------------------------------------------------------------------
+        pool.setBorrowFee(USDC, 50);
+        pool.setBorrowFee(EURC, 50);
+
+        // ------------------------------------------------------------------
         // 10. Grant Timelock RISK_ADMIN role so parameter changes are delayed
         // ------------------------------------------------------------------
         pool.grantRole(pool.RISK_ADMIN_ROLE(), address(timelock)); // RISK_ADMIN_ROLE is a public bytes32 constant
