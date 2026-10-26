@@ -12,13 +12,16 @@
  *   bun run src/keeper.ts
  *
  * Required env:
- *   KEEPER_PRIVATE_KEY  — funded keeper wallet private key
+ *   KEEPER_PRIVATE_KEY  — funded keeper wallet private key. Use a dedicated
+ *                         wallet: sharing it with a user's MetaMask account makes
+ *                         their transactions fail with "nonce too low".
  * Optional env:
  *   LENDING_POOL_ADDR   — defaults to the Phase 1 testnet deployment
  *   ORACLE_ADDR         — defaults to the Phase 1 PythOracleAdapter
  *   RPC_URL             — defaults to https://rpc.testnet.arc.io
  *   START_BLOCK         — first block to scan for Borrow events (default: head - 100k)
- *   POLL_INTERVAL_MS    — default 15000
+ *   POLL_INTERVAL_MS    — default 60000 (each price update costs ~$0.003 gas;
+ *                         60s stays well inside the oracle's 300s maxAge)
  */
 
 import { createPublicClient, createWalletClient, http, parseAbi, parseAbiItem, maxUint256 } from 'viem'
@@ -31,13 +34,13 @@ const RAW_KEEPER_KEY = process.env.KEEPER_PRIVATE_KEY
 const KEEPER_KEY = (RAW_KEEPER_KEY
   ? (RAW_KEEPER_KEY.startsWith('0x') ? RAW_KEEPER_KEY : `0x${RAW_KEEPER_KEY}`)
   : undefined) as `0x${string}` | undefined
-const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? '0x252E8662C945e340195B35816a3f9259CA264e8C') as `0x${string}`
+const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? '0x57E1066DA815DD1c1DD1adA82859729ce7f82989') as `0x${string}`
 const ORACLE = (process.env.ORACLE_ADDR ?? '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730') as `0x${string}`
 const PYTH_LAZER = '0xACeA761c27A909d4D3895128EBe6370FDE2dF481' as `0x${string}`
 const PYTH_API_KEY = process.env.PYTH_API_KEY
 const PYTH_PRO_URL = process.env.PYTH_PRO_URL ?? 'https://pyth-lazer.dourolabs.app'
 
-const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 15_000)
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 60_000)
 const RUN_ONCE = process.env.RUN_ONCE === '1'
 const MIN_HF_TRIGGER = Number(process.env.MIN_HF_TRIGGER ?? 1.0)
 

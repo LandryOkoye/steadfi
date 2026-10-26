@@ -1,6 +1,6 @@
 /**
  * SteadFi deployed contract addresses and ABIs for Arc Testnet.
- * All addresses verified from deployments/testnet.json (redeployed 2026-10-23).
+ * All addresses verified from deployments/testnet.json (pool redeployed 2026-10-26).
  * Never hardcode addresses elsewhere — import from here.
  */
 
@@ -11,7 +11,13 @@ export const ARC_TESTNET_CHAIN_ID = 5042002
  * logs from this block to the chain head in ≤5,000-block chunks (the Arc RPC
  * rejects larger eth_getLogs ranges).
  */
-export const POOL_DEPLOY_BLOCK = 68_770_501n
+export const POOL_DEPLOY_BLOCK = 69_205_409n
+
+/**
+ * The previous LendingPool (2026-10-24, superseded 2026-10-26). Users may still
+ * have funds there; the dashboard offers a one-click withdrawal from it.
+ */
+export const LEGACY_POOL = '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x${string}`
 
 // ── Token addresses (Arc Testnet) ─────────────────────────────────────────────
 export const TOKENS = {
@@ -52,19 +58,19 @@ export const BORROW_TOKENS: TokenSymbol[] = ['USDC', 'EURC']
 
 // ── Protocol contract addresses ────────────────────────────────────────────────
 export const CONTRACTS = {
-  LendingPool:  '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x${string}`,
+  LendingPool:  '0x57E1066DA815DD1c1DD1adA82859729ce7f82989' as `0x${string}`,
   Timelock:     '0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947' as `0x${string}`,
   PythOracle:   '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730' as `0x${string}`,
   // sTokens (supply receipt)
-  sUSDC:   '0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C' as `0x${string}`,
-  sEURC:   '0x781CD39D22bD8511DDB453BF0CDc717F54A53d11' as `0x${string}`,
-  sCIRBTC: '0x37bEE970fBA42c25f766dB7eE5e7fF2D4EF79063' as `0x${string}`,
-  sWETH:   '0x9F48c6c273A23f9e3Cc141BFFfD796EcdA1Fe7D4' as `0x${string}`,
+  sUSDC:   '0x8e48bC49b0D356467c97c6A0C3Fb27f1d5407836' as `0x${string}`,
+  sEURC:   '0x2aa7BcE6187CBCb3636b24a0a955b390a2b04E2f' as `0x${string}`,
+  sCIRBTC: '0xa01abcae53928d48113487228f21943106C826cc' as `0x${string}`,
+  sWETH:   '0xcd04ECa348427B272cEEead3973a7aFd7Ca270B6' as `0x${string}`,
   // debtTokens
-  dUSDC:   '0x36F1dF20B6f61ae840B7ACf5B6B6D2E14Dd3e07E' as `0x${string}`,
-  dEURC:   '0xA6634Fd478583a15eE6487d15f66Fe8D1665187E' as `0x${string}`,
-  dCIRBTC: '0xC7ec43E4A867F3A0217248718679CeAa08e2e6De' as `0x${string}`,
-  dWETH:   '0x0Be718E5F962Ea4b84defe0ec46e787376BE1832' as `0x${string}`,
+  dUSDC:   '0x3C757dd39e31E2887791Ee247421d389cdAa197C' as `0x${string}`,
+  dEURC:   '0x3173b17F76401a2a7295EEF464A12b13cC35F870' as `0x${string}`,
+  dCIRBTC: '0x32332a2b83dE3a4Bd758Ea24F81d362D28918880' as `0x${string}`,
+  dWETH:   '0x770ec4BDe6E655893C7bb3B8288Ec57732ed9F83' as `0x${string}`,
 } as const
 
 // Map token symbol to its sToken address
@@ -292,6 +298,14 @@ export const LENDING_POOL_ABI = [
       { name: 'supplyRatePerSecond', type: 'uint256' },
     ],
   },
+  // borrowFeeBps — one-time origination fee added to debt on every borrow
+  {
+    name: 'borrowFeeBps',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ name: '', type: 'uint16' }],
+  },
   // accrueInterest
   {
     name: 'accrueInterest',
@@ -397,6 +411,13 @@ export const LENDING_POOL_EVENTS_ABI = [
 ] as const
 
 export const IRM_ABI = [
+  ...(['baseRatePerYear', 'slope1PerYear', 'slope2PerYear', 'kink'] as const).map(name => ({
+    name,
+    type: 'function' as const,
+    stateMutability: 'view' as const,
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' as const }],
+  })),
   {
     name: 'getBorrowRatePerSecond',
     type: 'function',

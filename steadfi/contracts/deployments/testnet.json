@@ -1,7 +1,7 @@
 {
   "network": "Arc Testnet",
   "chainId": 5042002,
-  "deployedAt": "2026-10-24",
+  "deployedAt": "2026-10-26",
   "deployer": "0xbDD5A7a963EcA056f5A416268B1C2AC833E3e432",
   "_comment_oracle": "Live Pyth Pro (Lazer) storage adapter with per-feed stale/wide-confidence skip. Keeper pulls signed updates from the Pyth Lazer REST API and calls updatePrices(bytes).",
   "_comment_collateral": "Only cirBTC and WETH are collateralEnabled. USDC/EURC are lend-and-borrow only.",
@@ -48,10 +48,10 @@
       "txHash": "0x52a6a73ddc260636e8395d547e068d8aee3395b9e018e9642fa9bd6bd1d7a89d"
     },
     "LendingPool": {
-      "address": "0x252E8662C945e340195B35816a3f9259CA264e8C",
-      "txHash": "0x8b266ec14c5c79640215203af08ef0765de70da3d04695e1e7317a3cb36514a2",
-      "deployBlock": 68770501,
-      "note": "Adds fixed-term borrows: borrowWithTerm(asset, amount, durationDays) with terms 7/14/30/60/90/180 days; getLoanTerm/isLoanOverdue views."
+      "address": "0x57E1066DA815DD1c1DD1adA82859729ce7f82989",
+      "txHash": "0xfdf420b318f3c88618b2f9c364ec703d1c2f540566a81bf8a882157f05e6f899",
+      "deployBlock": 69205409,
+      "note": "2026-10-26 redeploy: delegate-gated *OnBehalfOf, sToken transfer guard, USD-priced debt, borrow-power check on new debt, liquidation/risk-param validation, 0.5% borrow fee (USDC/EURC). Reuses Timelock, IRMs and Pyth Pro adapter."
     },
     "IRM_Stable": {
       "address": "0xA4eCC81c1566abFc55355ba8ED2725400E41D1e6",
@@ -65,6 +65,64 @@
       "address": "0x42c69A87e59Cf8Dd845df2197d569745E7bb5730",
       "txHash": "0x69fab5208e154bd0c36f7dac4a0eacc16cbcc11e8097e9ad29c1dc99e1faf926",
       "note": "Pyth Pro adapter (Lazer verifier). Skips stale/dormant and wide-confidence feeds instead of reverting the whole batch."
+    },
+    "sUSDC": {
+      "address": "0x8e48bC49b0D356467c97c6A0C3Fb27f1d5407836",
+      "txHash": "0x2f75545f0c0b21ac3588f78af6f69d61861e6ced54499286c879f69df9f14659"
+    },
+    "dUSDC": {
+      "address": "0x3C757dd39e31E2887791Ee247421d389cdAa197C",
+      "txHash": "0xa0deed37aea764b3308973868209428bc9370d0d3470ad60d2b8ade4a6d35405"
+    },
+    "sEURC": {
+      "address": "0x2aa7BcE6187CBCb3636b24a0a955b390a2b04E2f",
+      "txHash": "0x81749e31ed67b981e1e09db05edadbc1de7f31fdb61588aea58a94d08e7df971"
+    },
+    "dEURC": {
+      "address": "0x3173b17F76401a2a7295EEF464A12b13cC35F870",
+      "txHash": "0x5867a6eb13745eb8a1e9b222bc7f3c32710896a9395449a6b843e659be366456"
+    },
+    "sCIRBTC": {
+      "address": "0xa01abcae53928d48113487228f21943106C826cc",
+      "txHash": "0xf57a4aa25a5370dfa7d0d2a83700b1b5162f38551ef4b002cf4102a48b846040"
+    },
+    "dCIRBTC": {
+      "address": "0x32332a2b83dE3a4Bd758Ea24F81d362D28918880",
+      "txHash": "0xa24a2bbde03417aa59707bbdd805b197825b426a69fecad61132e1d47b647bfe"
+    },
+    "sWETH": {
+      "address": "0xcd04ECa348427B272cEEead3973a7aFd7Ca270B6",
+      "txHash": "0x8acff0cc60a2b24f89146926be9af4dae696bfba6dde188af8e0f6a2952bbac3"
+    },
+    "dWETH": {
+      "address": "0x770ec4BDe6E655893C7bb3B8288Ec57732ed9F83",
+      "txHash": "0x24ac590ce90944d93265270ff98b3c9ebd7be0059b7a1774135556ff950342bf"
+    }
+  },
+  "proofTxs": {
+    "date": "2026-10-24",
+    "supplyUsdc": "0xd1950cca15a30ab02473d7073c5cc771342832c84d5283b0e443703d47227a6e",
+    "supplyCirBtc": "0x0cb0ef99041fc72652de0557a272aa85deb1437c77a14c0eb0b0edec6662acb7",
+    "borrowWithTerm7d": "0xa42769185f17670be8fab52505e81939bdb0dcbca86990227e6d7d7f9c1ae450",
+    "repayUsdc": "0xd207062c3326a6991da0dd95c64d18e50c2d94862aa05992ec8b71def60ef527",
+    "withdrawUsdc": "0x445ccf7ad2fdac7a0b9ec887f09a9547d916d48e5dfc1d0a52d18f125934ecfd",
+    "withdrawCirBtc": "0x50c03e69f0fd65f0741ea32801535228d42eb3d537eb8456697c403f84a59a36",
+    "note": "Full E2E on the 2026-10-24 pool: borrowWithTerm recorded a 7-day term (due = borrowedAt + 604800s); full repay cleared it."
+  },
+  "smokeTest": {
+    "address": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652",
+    "txHash": "not-recorded"
+  },
+  "arcscanExplorer": "https://explorer.testnet.arc.io",
+  "deployBroadcast": "broadcast/DeployPhase1.s.sol/5042002/run-latest.json",
+  "proAdapterBroadcast": "broadcast/DeployProAdapter.s.sol/5042002/run-latest.json",
+  "legacyPool_2026_10_24": {
+    "_comment": "Superseded by the 2026-10-26 redeploy. Users withdraw remaining funds from here (dashboard banner).",
+    "LendingPool": {
+      "address": "0x252E8662C945e340195B35816a3f9259CA264e8C",
+      "txHash": "0x8b266ec14c5c79640215203af08ef0765de70da3d04695e1e7317a3cb36514a2",
+      "deployBlock": 68770501,
+      "note": "Adds fixed-term borrows: borrowWithTerm(asset, amount, durationDays) with terms 7/14/30/60/90/180 days; getLoanTerm/isLoanOverdue views."
     },
     "sUSDC": {
       "address": "0xd1bb560d75374eF90C78C9dEdf1e2C1d2e881b1C",
@@ -99,21 +157,5 @@
       "txHash": "0x5f056cd3ba79cd3148271e08d90506d13a214608fa9f6348b17ca101ce0d1ac9"
     }
   },
-  "proofTxs": {
-    "date": "2026-10-24",
-    "supplyUsdc": "0xd1950cca15a30ab02473d7073c5cc771342832c84d5283b0e443703d47227a6e",
-    "supplyCirBtc": "0x0cb0ef99041fc72652de0557a272aa85deb1437c77a14c0eb0b0edec6662acb7",
-    "borrowWithTerm7d": "0xa42769185f17670be8fab52505e81939bdb0dcbca86990227e6d7d7f9c1ae450",
-    "repayUsdc": "0xd207062c3326a6991da0dd95c64d18e50c2d94862aa05992ec8b71def60ef527",
-    "withdrawUsdc": "0x445ccf7ad2fdac7a0b9ec887f09a9547d916d48e5dfc1d0a52d18f125934ecfd",
-    "withdrawCirBtc": "0x50c03e69f0fd65f0741ea32801535228d42eb3d537eb8456697c403f84a59a36",
-    "note": "Full E2E on the 2026-10-24 pool: borrowWithTerm recorded a 7-day term (due = borrowedAt + 604800s); full repay cleared it."
-  },
-  "smokeTest": {
-    "address": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652",
-    "txHash": "not-recorded"
-  },
-  "arcscanExplorer": "https://explorer.testnet.arc.io",
-  "deployBroadcast": "broadcast/DeployPhase1.s.sol/5042002/run-latest.json",
-  "proAdapterBroadcast": "broadcast/DeployProAdapter.s.sol/5042002/run-latest.json"
+  "redeployBroadcast": "broadcast/RedeployPool.s.sol/5042002/run-latest.json"
 }

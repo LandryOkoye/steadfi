@@ -48,7 +48,7 @@ function usdcAddressFromFacts(_chainId: number): `0x${string}` {
 // ── Config ────────────────────────────────────────────────────────────────────
 const CHAIN_ID      = arcTestnet.id                        // 5042002
 const COMPASS_KEY   = 'Arc_Testnet'                        // RPC_PROXY_CHAINS key
-const LENDING_POOL  = (process.env.VITE_LENDING_POOL_ADDR ?? '0x252E8662C945e340195B35816a3f9259CA264e8C') as `0x${string}`
+const LENDING_POOL  = (process.env.VITE_LENDING_POOL_ADDR ?? '0x57E1066DA815DD1c1DD1adA82859729ce7f82989') as `0x${string}`
 const EURC_ADDR     = (process.env.VITE_EURC_ADDRESS ?? KNOWN_EURC_ADDRESS) as `0x${string}`
 const PORT          = parseInt(process.env.PORT ?? '3001')
 const BATCH_SIZE    = 2_000n
