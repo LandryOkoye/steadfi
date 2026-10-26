@@ -1,44 +1,74 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700;800&family=Space+Grotesk:wght@600&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ── SteadFi Design Tokens (ui-ux-pro-max: DeFi fintech dark, variance 6, density 7) ── */
-:root {
-  --color-primary:          #F59E0B;
+/* ── SteadFi design tokens ─────────────────────────────────────────────────────
+ * App: near-black neutral surfaces (Aave-inspired) with the brand sheet's
+ * Ledger Green (#10B981) accent and Steady Navy (#0F172A). Landing: light
+ * theme via .theme-light.
+ * Components only reference these tokens, never raw hex.
+ */
+:root, .theme-dark {
+  --color-primary:          #34D399;
   --color-on-primary:       #0F172A;
-  --color-secondary:        #FBBF24;
+  --color-secondary:        #10B981;
   --color-on-secondary:     #0F172A;
-  --color-accent:           #8B5CF6;
-  --color-on-accent:        #000000;
-  --color-background:       #0F172A;
-  --color-foreground:       #F8FAFC;
-  --color-card:             #1E2538;
-  --color-card-hover:       #252d42;
-  --color-muted:            #272F42;
-  --color-muted-foreground: #94A3B8;
-  --color-border:           #334155;
-  --color-destructive:      #EF4444;
-  --color-success:          #22C55E;
-  --color-warning:          #F59E0B;
-  --color-ring:             #F59E0B;
+  --color-accent:           #10B981;
+  --color-on-accent:        #07080B;
+  --color-background:       #07080B;
+  --color-foreground:       #F3F4F6;
+  --color-card:             #0F1116;
+  --color-card-hover:       #151820;
+  --color-elevated:         #14171E;
+  --color-muted:            #1A1D25;
+  --color-muted-foreground: #8D95A5;
+  --color-border:           #222631;
+  --color-border-strong:    #2E3340;
+  --color-destructive:      #F26D6D;
+  --color-success:          #3DD68C;
+  --color-warning:          #F5B94A;
+  --color-ring:             #34D399;
+  /* Chart series colour, validated (dataviz) against --color-card in dark mode. */
+  --color-chart-1:          #6B8CF7;
 
-  /* Spacing (density 7 — standard-to-dense) */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-  --space-12: 48px;
+  --gradient-brand: linear-gradient(115deg, #10B981 0%, #6EE7B7 100%);
+  --shadow-card: 0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 32px -16px rgba(0,0,0,0.6);
+  --shadow-pop:  0 24px 64px -24px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.06);
 
-  /* Typography */
-  --font-heading: 'Space Grotesk', system-ui, sans-serif;
+  --radius-card: 18px;
+  --radius-control: 12px;
+
+  --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
   --font-body:    'Inter', system-ui, sans-serif;
-  --font-mono:    'JetBrains Mono', monospace;
+  --font-mono:    'Inter', system-ui, sans-serif;
+
+  color-scheme: dark;
+}
+
+/* Landing page (light, Aave-style marketing surface) */
+.theme-light {
+  --color-primary:          #047857;
+  --color-on-primary:       #FFFFFF;
+  --color-accent:           #10B981;
+  --color-background:       #F6F7FA;
+  --color-foreground:       #0F172A;
+  --color-card:             #FFFFFF;
+  --color-card-hover:       #F9FAFC;
+  --color-elevated:         #FFFFFF;
+  --color-muted:            #EEF0F5;
+  --color-muted-foreground: #5A6272;
+  --color-border:           #E4E7EE;
+  --color-border-strong:    #D5D9E2;
+  --color-success:          #0F9D63;
+  --color-warning:          #B7791F;
+  --color-destructive:      #D93C3C;
+  --gradient-brand: linear-gradient(115deg, #047857 0%, #10B981 100%);
+  --shadow-card: 0 1px 2px rgba(16,24,40,0.04), 0 12px 32px -20px rgba(16,24,40,0.18);
+  color-scheme: light;
+  background: var(--color-background);
+  color: var(--color-foreground);
 }
 
 * { box-sizing: border-box; }
@@ -50,21 +80,32 @@ body {
   font-family: var(--font-body);
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-heading);
   font-weight: 600;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--color-background); }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-muted-foreground); }
 
-/* Number values use mono font */
-.mono { font-family: var(--font-mono); }
+/* Numbers: tabular figures so columns and live values never jitter. */
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+.text-gradient {
+  background: var(--gradient-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 
 /* Health factor colour bands */
 .hf-safe    { color: var(--color-success); }
@@ -72,14 +113,34 @@ h1, h2, h3, h4, h5, h6 {
 .hf-danger  { color: var(--color-destructive); }
 
 /* Transitions */
-.transition-base { transition: all 200ms cubic-bezier(.4,0,.2,1); }
+.transition-base { transition: all 180ms cubic-bezier(.2,.7,.2,1); }
+
+/* Skeleton shimmer for loading values */
+.skeleton {
+  display: inline-block;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-border-strong) 50%, var(--color-muted) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Ambient glow behind the app header area */
+.app-glow {
+  background:
+    radial-gradient(60rem 28rem at 15% -10%, rgba(16,185,129,0.10), transparent 60%),
+    radial-gradient(50rem 24rem at 90% -20%, rgba(15,23,42,0.9), transparent 60%);
+}
 
 /* Focus ring */
 :focus-visible {
   outline: 2px solid var(--color-ring);
   outline-offset: 2px;
+  border-radius: 6px;
 }
 
+button, a, [role="button"] { touch-action: manipulation; }
+
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
