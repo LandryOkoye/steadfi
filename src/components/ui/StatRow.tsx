@@ -1,11 +1,11 @@
 /**
- * StatRow — label + value row used in cards and position panels.
+ * StatRow — label + value row used in cards, modals and detail panels.
  */
 import { type ReactNode } from 'react'
 import { clsx } from 'clsx'
 
 interface StatRowProps {
-  label: string
+  label: ReactNode
   value: ReactNode
   hint?: string
   mono?: boolean
@@ -14,12 +14,11 @@ interface StatRowProps {
 
 export default function StatRow({ label, value, hint, mono = false, className }: StatRowProps) {
   return (
-    <div className={clsx('flex items-center justify-between py-2 border-b border-[var(--color-border)] last:border-0', className)}>
-      <span className="text-sm text-[var(--color-muted-foreground)]">
+    <div className={clsx('flex items-center justify-between gap-4 py-2.5', className)}>
+      <span className="text-sm text-[var(--color-muted-foreground)]" title={hint}>
         {label}
-        {hint && <span className="ml-1 text-[10px] text-[var(--color-muted-foreground)] opacity-60">{hint}</span>}
       </span>
-      <span className={clsx('text-sm text-[var(--color-foreground)] font-medium', mono && 'mono')}>
+      <span className={clsx('text-sm text-right text-[var(--color-foreground)]', mono && 'mono')}>
         {value}
       </span>
     </div>

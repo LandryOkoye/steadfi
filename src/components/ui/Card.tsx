@@ -1,5 +1,5 @@
 /**
- * Card — base card with optional hover state and header slot.
+ * Card — base surface with optional hover state and header slot.
  */
 import { type ReactNode } from 'react'
 import { clsx } from 'clsx'
@@ -15,8 +15,8 @@ export function Card({ children, className, hover = false, as: Tag = 'div' }: Ca
   return (
     <Tag
       className={clsx(
-        'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-5',
-        hover && 'hover:bg-[var(--color-card-hover)] transition-base cursor-pointer',
+        'rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-5 shadow-[var(--shadow-card)]',
+        hover && 'hover:bg-[var(--color-card-hover)] hover:border-[var(--color-border-strong)] transition-base cursor-pointer',
         className,
       )}
     >
@@ -27,7 +27,7 @@ export function Card({ children, className, hover = false, as: Tag = 'div' }: Ca
 
 export function CardHeader({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={clsx('flex items-center justify-between mb-4', className)}>
+    <div className={clsx('flex items-center justify-between gap-3 mb-4', className)}>
       {children}
     </div>
   )
@@ -35,7 +35,7 @@ export function CardHeader({ children, className }: { children: ReactNode; class
 
 export function CardTitle({ children }: { children: ReactNode }) {
   return (
-    <h2 className="text-sm font-semibold text-[var(--color-muted-foreground)] uppercase tracking-wider">
+    <h2 className="text-[15px] font-semibold text-[var(--color-foreground)] tracking-tight">
       {children}
     </h2>
   )

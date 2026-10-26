@@ -1,10 +1,12 @@
 /**
- * Button — primary / secondary / ghost / danger variants.
+ * Button — primary / brand / secondary / ghost / danger variants.
+ * Primary is a high-contrast solid (foreground on background), brand uses the
+ * blue→cyan gradient for the single most important action on a surface.
  */
 import { type ReactNode, type ButtonHTMLAttributes } from 'react'
 import { clsx } from 'clsx'
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
+type Variant = 'primary' | 'brand' | 'secondary' | 'ghost' | 'danger'
 type Size    = 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -15,16 +17,17 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<Variant, string> = {
-  primary:   'bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:brightness-110 active:brightness-90 font-semibold',
-  secondary: 'border border-[var(--color-border)] text-[var(--color-foreground)] hover:bg-[var(--color-muted)] bg-transparent',
-  ghost:     'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] hover:bg-[var(--color-muted)] bg-transparent',
-  danger:    'bg-[var(--color-destructive)] text-white hover:brightness-110 active:brightness-90 font-semibold',
+  primary:   'bg-[var(--color-foreground)] text-[var(--color-background)] hover:opacity-90 font-semibold',
+  brand:     'bg-[image:var(--gradient-brand)] text-[#0F172A] hover:brightness-110 font-semibold shadow-[0_8px_24px_-12px_rgba(16,185,129,0.6)]',
+  secondary: 'bg-[var(--color-muted)] text-[var(--color-foreground)] border border-[var(--color-border)] hover:bg-[var(--color-card-hover)] hover:border-[var(--color-border-strong)] font-medium',
+  ghost:     'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] hover:bg-[var(--color-muted)] bg-transparent font-medium',
+  danger:    'bg-[var(--color-destructive)] text-white hover:brightness-110 font-semibold',
 }
 
 const SIZES: Record<Size, string> = {
-  sm: 'px-3 py-1.5 text-xs rounded-lg',
-  md: 'px-4 py-2.5 text-sm rounded-xl',
-  lg: 'px-6 py-3 text-base rounded-xl',
+  sm: 'h-8 px-3 text-xs rounded-[10px]',
+  md: 'h-11 px-4 text-sm rounded-[var(--radius-control)]',
+  lg: 'h-12 px-6 text-[15px] rounded-[14px]',
 }
 
 export default function Button({
@@ -34,15 +37,19 @@ export default function Button({
   disabled,
   children,
   className,
+  type = 'button',
   ...rest
 }: ButtonProps) {
   return (
     <button
       {...rest}
+      type={type}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={clsx(
-        'inline-flex items-center justify-center gap-2 transition-base cursor-pointer',
-        'disabled:opacity-50 disabled:cursor-not-allowed',
+        'inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer select-none',
+        'transition-base active:scale-[0.98]',
+        'disabled:opacity-45 disabled:cursor-not-allowed disabled:active:scale-100',
         VARIANTS[variant],
         SIZES[size],
         className,
