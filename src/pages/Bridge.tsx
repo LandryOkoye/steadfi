@@ -90,11 +90,12 @@ export default function Bridge() {
   }
 
   return (
-    <div className="max-w-lg mx-auto space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>Bridge In</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-          Move USDC from another chain to Arc Testnet via Circle CCTP — then deposit into SteadFi.
+    <div className="max-w-xl mx-auto space-y-5">
+      <div className="mb-2">
+        <p className="text-sm text-[var(--color-muted-foreground)]">Circle CCTP</p>
+        <h1 className="mt-1 text-3xl md:text-4xl font-semibold">Bridge USDC to Arc</h1>
+        <p className="text-sm text-[var(--color-muted-foreground)] mt-2">
+          Move USDC from another testnet to Arc with Circle’s Cross-Chain Transfer Protocol, then supply it on SteadFi.
         </p>
       </div>
 
@@ -105,10 +106,11 @@ export default function Bridge() {
             <button
               key={c.key}
               onClick={() => { setChainKey(c.key); setResult(null) }}
-              className={`py-2.5 rounded-xl border text-sm font-medium transition-base cursor-pointer
+              aria-pressed={chainKey === c.key}
+              className={`h-11 rounded-[12px] border text-sm font-medium transition-base cursor-pointer
                 ${chainKey === c.key
-                  ? 'border-[var(--color-primary)] bg-[var(--color-muted)] text-[var(--color-primary)]'
-                  : 'border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-primary)]'
+                  ? 'border-[var(--color-foreground)] bg-[var(--color-muted)] text-[var(--color-foreground)]'
+                  : 'border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-foreground)]'
                 }`}
             >
               {c.label}
@@ -128,7 +130,7 @@ export default function Bridge() {
           id="bridge-amount"
         />
 
-        <div className="mt-4 rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono space-y-1">
+        <div className="mt-4 rounded-[14px] border border-[var(--color-border)] p-3 text-xs space-y-1">
           <p><span className="text-[var(--color-muted-foreground)]">From:</span> {source.label}</p>
           <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc Testnet (domain {CCTP.domain})</p>
           <p className="break-all"><span className="text-[var(--color-muted-foreground)]">Mint recipient:</span> {isConnected ? 'your connected wallet' : 'connect wallet'}</p>
@@ -164,12 +166,12 @@ export default function Bridge() {
               <div key={`${s.name}-${i}`} className="flex items-start justify-between py-1.5 border-b border-[var(--color-border)] last:border-0">
                 <div className="flex items-start gap-2">
                   {s.state === 'success' && <CheckCircle size={14} className="text-[var(--color-success)] mt-0.5" aria-hidden="true" />}
-                  {s.state === 'error' && <WarningCircle size={14} className="text-[var(--color-danger)] mt-0.5" aria-hidden="true" />}
+                  {s.state === 'error' && <WarningCircle size={14} className="text-[var(--color-destructive)] mt-0.5" aria-hidden="true" />}
                   {(s.state === 'pending' || s.state === 'noop') && <Info size={14} className="text-[var(--color-muted-foreground)] mt-0.5" aria-hidden="true" />}
                   <div>
                     <p className="text-sm font-medium">{s.name}</p>
                     <p className="text-xs text-[var(--color-muted-foreground)]">{s.state}</p>
-                    {s.errorMessage && <p className="text-xs text-[var(--color-danger)] mt-0.5">{s.errorMessage}</p>}
+                    {s.errorMessage && <p className="text-xs text-[var(--color-destructive)] mt-0.5">{s.errorMessage}</p>}
                   </div>
                 </div>
                 {s.txHash && (
@@ -187,7 +189,7 @@ export default function Bridge() {
           </div>
           {result.state === 'success' && (
             <p className="text-xs text-[var(--color-success)] mt-3">
-              USDC has arrived on Arc Testnet. Head to Supply to deposit it.
+              USDC has arrived on Arc Testnet. Supply it from your Dashboard to start earning.
             </p>
           )}
         </Card>
@@ -195,7 +197,7 @@ export default function Bridge() {
 
       <Card>
         <CardHeader><CardTitle>CCTP contracts (Arc Testnet)</CardTitle></CardHeader>
-        <div className="rounded-xl bg-[var(--color-muted)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
+        <div className="rounded-[14px] border border-[var(--color-border)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
           <p className="text-[var(--color-muted-foreground)]">// MessageTransmitterV2</p>
           <p className="break-all">{CCTP.MessageTransmitterV2}</p>
           <p className="text-[var(--color-muted-foreground)] mt-2">// TokenMessengerV2</p>

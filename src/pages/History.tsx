@@ -6,16 +6,18 @@ import { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight, ArrowSquareOut } from '@phosphor-icons/react'
 import { useAccount, usePublicClient } from 'wagmi'
-import type { Log, AbiEvent } from 'viem'
+import type { AbiEvent } from 'viem'
 import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI, POOL_DEPLOY_BLOCK, ARC_TESTNET_CHAIN_ID } from '../lib/steadfi'
-import { formatUnits, hexToBytes } from 'viem'
-
-/** Arc's RPC rejects eth_getLogs ranges above ~10k blocks — chunk at 5k. */
-const LOG_CHUNK = 5_000n
-/** Small concurrency so we stay well under the RPC's rate limits. */
-const CONCURRENCY = 4
+import { formatUnits, hexToBytes, pad } from 'viem'
+import { getLogsChunked } from '../lib/logs'
 
 type TxType = 'Supply' | 'Borrow' | 'Repay' | 'Withdraw'
+const TX_TYPES: readonly TxType[] = ['Supply', 'Borrow', 'Repay', 'Withdraw']
+
+/** Event ABIs looked up by name — never by array position. */
+const HISTORY_EVENTS = LENDING_POOL_EVENTS_ABI.filter(
+  e => (TX_TYPES as readonly string[]).includes(e.name)
+) as unknown as AbiEvent[]
 
 interface TxRecord {
   type: TxType
@@ -51,53 +53,34 @@ export default function History() {
   const [filter, setFilter] = useState<TxType | 'all'>('all')
   const [txs, setTxs] = useState<TxRecord[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [progress, setProgress] = useState(0)
 
   useEffect(() => {
     if (!address || !publicClient) return
 
     let cancelled = false
 
-    /** Fetch one event type across the pool's full history in 5k-block chunks. */
-    async function fetchEventChunked(event: AbiEvent): Promise<Log[]> {
-      const head = await publicClient!.getBlockNumber()
-      const chunks: { from: bigint; to: bigint }[] = []
-      for (let s = POOL_DEPLOY_BLOCK; s <= head; s += LOG_CHUNK) {
-        chunks.push({ from: s, to: s + LOG_CHUNK - 1n > head ? head : s + LOG_CHUNK - 1n })
-      }
-
-      const logs: Log[] = []
-      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
-        if (cancelled) return logs
-        const batch = chunks.slice(i, i + CONCURRENCY)
-        const results = await Promise.all(
-          batch.map(({ from, to }) =>
-            publicClient!.getLogs({
-              address: CONTRACTS.LendingPool,
-              event,
-              args: { user: address },
-              fromBlock: from,
-              toBlock: to,
-            })
-          )
-        )
-        for (const r of results) logs.push(...r)
-      }
-      return logs
-    }
-
     async function fetchLogs() {
-      if (!cancelled) setLoading(true)
+      if (!cancelled) { setLoading(true); setError(null); setProgress(0) }
       try {
-        const [supplyLogs, borrowLogs, repayLogs, withdrawLogs] = await Promise.all([
-          fetchEventChunked(LENDING_POOL_EVENTS_ABI[0] as unknown as AbiEvent),
-          fetchEventChunked(LENDING_POOL_EVENTS_ABI[1] as unknown as AbiEvent),
-          fetchEventChunked(LENDING_POOL_EVENTS_ABI[2] as unknown as AbiEvent),
-          fetchEventChunked(LENDING_POOL_EVENTS_ABI[3] as unknown as AbiEvent),
-        ])
+        // `user` is the first indexed arg of all four events, so the RPC
+        // returns only this wallet's events; results are cached per wallet.
+        const logs = await getLogsChunked(
+          publicClient!, CONTRACTS.LendingPool, HISTORY_EVENTS, POOL_DEPLOY_BLOCK,
+          {
+            topics: [pad(address!.toLowerCase() as `0x${string}`)],
+            cacheKey: `history:${address!.toLowerCase()}`,
+            isCancelled: () => cancelled,
+            onProgress: f => { if (!cancelled) setProgress(f) },
+          },
+        )
 
         if (cancelled) return
 
         type RawLog = {
+          eventName?: string
           args?: {
             user?: string
             asset?: string
@@ -110,6 +93,7 @@ export default function History() {
 
         function parseLogs(logs: readonly unknown[], type: TxType): TxRecord[] {
           return (logs as RawLog[])
+            .filter(log => log.eventName === type)
             .filter(log => log.args?.user?.toLowerCase() === address!.toLowerCase())
             .map(log => {
             const assetAddr = log.args?.asset?.toLowerCase() ?? ''
@@ -137,16 +121,14 @@ export default function History() {
           })
         }
 
-        const all: TxRecord[] = [
-          ...parseLogs(supplyLogs, 'Supply'),
-          ...parseLogs(borrowLogs, 'Borrow'),
-          ...parseLogs(repayLogs, 'Repay'),
-          ...parseLogs(withdrawLogs, 'Withdraw'),
-        ].sort((a, b) => Number(b.blockNumber - a.blockNumber))
+        const all: TxRecord[] = TX_TYPES
+          .flatMap(type => parseLogs(logs, type))
+          .sort((a, b) => Number(b.blockNumber - a.blockNumber))
 
         setTxs(all)
       } catch (err) {
         console.error('Failed to fetch history logs', err)
+        if (!cancelled) setError('Could not load your history from the Arc RPC.')
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -154,16 +136,17 @@ export default function History() {
 
     void fetchLogs()
     return () => { cancelled = true }
-  }, [address, publicClient])
+  }, [address, publicClient, reloadKey])
 
   const filtered = txs.filter(h => filter === 'all' || h.type === filter)
 
   return (
     <div className="max-w-3xl mx-auto space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>History</h1>
-        <p className="text-sm text-[var(--color-muted-foreground)] mt-1">
-          Your onchain transaction history — since the current pool deployment. Repayment memos stored onchain.
+      <div className="mb-2">
+        <p className="text-sm text-[var(--color-muted-foreground)]">Activity</p>
+        <h1 className="mt-1 text-3xl md:text-4xl font-semibold">History</h1>
+        <p className="text-sm text-[var(--color-muted-foreground)] mt-2">
+          Your on-chain transactions since the current pool deployment, including repayment references.
         </p>
       </div>
 
@@ -182,9 +165,10 @@ export default function History() {
                 <button
                   key={f.value}
                   onClick={() => setFilter(f.value)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-base cursor-pointer
+                  aria-pressed={filter === f.value}
+                className={`h-8 px-3 rounded-full text-xs font-medium transition-base cursor-pointer
                     ${filter === f.value
-                      ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
+                      ? 'bg-[var(--color-foreground)] text-[var(--color-background)]'
                       : 'bg-[var(--color-muted)] text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'
                     }`}
                 >
@@ -195,7 +179,19 @@ export default function History() {
           </CardHeader>
 
           {loading ? (
-            <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">Loading history…</p>
+            <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
+              Loading history…{progress > 0 && progress < 1 && ` ${Math.round(progress * 100)}%`}
+            </p>
+          ) : error ? (
+            <div className="py-4 text-center space-y-2">
+              <p className="text-sm text-[var(--color-warning)]">{error}</p>
+              <button
+                onClick={() => setReloadKey(k => k + 1)}
+                className="px-3 py-1 rounded-full text-xs font-medium bg-[var(--color-muted)] text-[var(--color-foreground)] cursor-pointer"
+              >
+                Retry (continues where it stopped)
+              </button>
+            </div>
           ) : filtered.length === 0 ? (
             <p className="text-sm text-[var(--color-muted-foreground)] py-4 text-center">
               No transactions found.
