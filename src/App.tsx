@@ -1,35 +1,60 @@
 /**
  * SteadFi — App root with React Router.
- * All routes render inside AppShell (sidebar nav + topbar).
+ * - `/`            public landing page (light theme)
+ * - user app       inside AppShell (top nav): dashboard, markets, asset detail,
+ *                  bridge, history. Supply/withdraw/borrow/repay are modals.
+ * - `/admin/*`     admin console with its own shell, lazily loaded so the
+ *                  public app never downloads admin code.
+ * Old action routes (/supply, /borrow, …) redirect to the dashboard modal.
  */
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import AppShell  from './components/layout/AppShell'
-import Markets   from './pages/Markets'
-import Supply    from './pages/Supply'
-import Borrow    from './pages/Borrow'
-import Repay     from './pages/Repay'
-import Withdraw  from './pages/Withdraw'
-import Positions from './pages/Positions'
-import History   from './pages/History'
-import Bridge    from './pages/Bridge'
+import { MotionConfig } from 'framer-motion'
+import ErrorBoundary from './components/ErrorBoundary'
+import AppShell    from './components/layout/AppShell'
+import Landing     from './pages/Landing'
+import Dashboard   from './pages/Dashboard'
+import Markets     from './pages/Markets'
+import History     from './pages/History'
+
+const AdminApp = lazy(() => import('./admin/AdminApp'))
+// Asset pages carry the charting library; load it only when one is opened.
+const AssetDetail = lazy(() => import('./pages/AssetDetail'))
+// Bridge pulls in Circle's App Kit (large); load it on demand too.
+const Bridge = lazy(() => import('./pages/Bridge'))
+
+const ACTION_REDIRECTS = ['supply', 'borrow', 'repay', 'withdraw'] as const
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/markets" replace />} />
-          <Route path="markets"   element={<Markets />} />
-          <Route path="supply"    element={<Supply />} />
-          <Route path="borrow"    element={<Borrow />} />
-          <Route path="repay"     element={<Repay />} />
-          <Route path="withdraw"  element={<Withdraw />} />
-          <Route path="positions" element={<Positions />} />
-          <Route path="history"   element={<History />} />
-          <Route path="bridge"    element={<Bridge />} />
-          <Route path="*"         element={<Navigate to="/markets" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <MotionConfig reducedMotion="user">
+        <BrowserRouter>
+          <Routes>
+            <Route index element={<Landing />} />
+            <Route
+              path="admin/*"
+              element={
+                <Suspense fallback={<p className="p-6 text-sm text-[var(--color-muted-foreground)]">Loading admin console…</p>}>
+                  <AdminApp />
+                </Suspense>
+              }
+            />
+            <Route element={<AppShell />}>
+              <Route path="dashboard"        element={<Dashboard />} />
+              <Route path="markets"          element={<Markets />} />
+              <Route path="markets/:symbol"  element={<Suspense fallback={<div className="skeleton h-96 w-full" />}><AssetDetail /></Suspense>} />
+              <Route path="history"          element={<History />} />
+              <Route path="bridge"           element={<Suspense fallback={<div className="skeleton h-96 w-full" />}><Bridge /></Suspense>} />
+              {ACTION_REDIRECTS.map(a => (
+                <Route key={a} path={a} element={<Navigate to={`/dashboard?action=${a}`} replace />} />
+              ))}
+              <Route path="positions"        element={<Navigate to="/dashboard" replace />} />
+              <Route path="*"                element={<Navigate to="/dashboard" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </MotionConfig>
+    </ErrorBoundary>
   )
 }
