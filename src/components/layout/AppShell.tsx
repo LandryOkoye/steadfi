@@ -1,167 +1,157 @@
 /**
- * AppShell — persistent sidebar nav + top bar.
- * Design: ui-ux-pro-max DeFi dark, Space Grotesk headings, Inter body.
+ * AppShell — user app frame: sticky glass top bar (Aave-style), page outlet
+ * with the action modals provider, and a slim footer. Mobile gets a sheet menu.
  */
-
-import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import {
-  ChartBar,
-  ArrowCircleDown,
-  ArrowCircleUp,
-  ArrowsClockwise,
-  ArrowCircleUpRight,
-  Wallet,
-  ArrowUpRight,
-  List,
-  X,
-  TestTube,
-} from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { List, X, TestTube, ArrowSquareOut } from '@phosphor-icons/react'
 import { ConnectKitButton } from 'connectkit'
+import { AnimatePresence, motion } from 'framer-motion'
 import NetworkBadge from '../ui/NetworkBadge'
 import GasEstimate from '../ui/GasEstimate'
 import WrongNetworkBanner from '../ui/WrongNetworkBanner'
+import Logo from '../ui/Logo'
+import { ActionProvider } from '../actions/ActionProvider'
 
 const NAV = [
-  { to: '/markets',    label: 'Markets',    Icon: ChartBar },
-  { to: '/supply',     label: 'Supply',     Icon: ArrowCircleDown },
-  { to: '/borrow',     label: 'Borrow',     Icon: ArrowCircleUp },
-  { to: '/repay',      label: 'Repay',      Icon: ArrowsClockwise },
-  { to: '/withdraw',   label: 'Withdraw',   Icon: ArrowCircleUpRight },
-  { to: '/positions',  label: 'Positions',  Icon: Wallet },
-  { to: '/history',    label: 'History',    Icon: List },
-  { to: '/bridge',     label: 'Bridge In',  Icon: ArrowUpRight },
+  { to: '/dashboard', label: 'Dashboard' },
+  { to: '/markets',   label: 'Markets' },
+  { to: '/bridge',    label: 'Bridge' },
+  { to: '/history',   label: 'History' },
 ]
 
 export default function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
 
+  // Close the mobile menu and reset scroll on navigation.
+  useEffect(() => {
+    setMenuOpen(false)
+    window.scrollTo({ top: 0 })
+  }, [location.pathname])
+
   return (
-    <div className="flex min-h-dvh bg-[var(--color-background)]">
-      {/* ── Sidebar (desktop) ── */}
-      <aside className="hidden md:flex flex-col w-56 border-r border-[var(--color-border)] bg-[var(--color-card)] shrink-0">
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-[var(--color-border)]">
-          <span className="font-heading text-xl font-700 text-[var(--color-primary)] tracking-tight"
-                style={{ fontFamily: 'var(--font-heading)' }}>
-            Stead<span className="text-[var(--color-foreground)]">Fi</span>
-          </span>
-          <div className="text-[10px] text-[var(--color-muted-foreground)] mt-0.5">Arc Testnet</div>
-        </div>
+    <ActionProvider>
+      <div className="min-h-dvh flex flex-col bg-[var(--color-background)]">
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[200] focus:rounded-lg focus:bg-[var(--color-foreground)] focus:px-3 focus:py-2 focus:text-[var(--color-background)]">
+          Skip to content
+        </a>
 
-        {/* Nav */}
-        <nav className="flex-1 py-3 overflow-y-auto" aria-label="Main navigation">
-          {NAV.map(({ to, label, Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-5 py-2.5 text-sm transition-base rounded-none
-                 ${isActive
-                   ? 'bg-[var(--color-muted)] text-[var(--color-primary)] font-semibold border-r-2 border-[var(--color-primary)]'
-                   : 'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] hover:bg-[var(--color-muted)]'
-                 }`
-              }
-            >
-              <Icon size={18} weight={location.pathname.startsWith(to) ? 'fill' : 'regular'} aria-hidden="true" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
+        <header className="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-background)_80%,transparent)] backdrop-blur-xl">
+          <div className="mx-auto flex h-16 max-w-[1240px] items-center gap-6 px-4 md:px-6">
+            <Link to="/" aria-label="SteadFi home" className="shrink-0">
+              <Logo />
+            </Link>
 
-        {/* Bottom: gas estimate */}
-        <div className="px-4 py-4 border-t border-[var(--color-border)]">
-          <GasEstimate />
-        </div>
-      </aside>
+            <nav className="hidden md:flex items-center gap-1 h-full" aria-label="Main">
+              {NAV.map(({ to, label }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={({ isActive }) =>
+                    `relative flex h-full items-center px-3 text-sm transition-base
+                     ${isActive ? 'text-[var(--color-foreground)] font-semibold' : 'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'}`
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      {label}
+                      {isActive && (
+                        <motion.span
+                          layoutId="nav-underline"
+                          className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-[image:var(--gradient-brand)]"
+                        />
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </nav>
 
-      {/* ── Main ── */}
-      <div className="flex flex-col flex-1 min-w-0">
-        {/* Top bar */}
-        <header className="flex items-center justify-between px-4 md:px-6 h-14 border-b border-[var(--color-border)] bg-[var(--color-card)] sticky top-0 z-40">
-          {/* Mobile menu button */}
-          <button
-            className="md:hidden text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] transition-base"
-            onClick={() => setMenuOpen(true)}
-            aria-label="Open menu"
-          >
-            <List size={22} />
-          </button>
-
-          {/* Mobile logo */}
-          <span className="md:hidden font-heading text-lg font-700 text-[var(--color-primary)]"
-                style={{ fontFamily: 'var(--font-heading)' }}>
-            SteadFi
-          </span>
-
-          {/* Right side */}
-          <div className="flex items-center gap-3">
-            <NetworkBadge />
-            <ConnectKitButton />
+            <div className="ml-auto flex items-center gap-2">
+              <NetworkBadge />
+              <ConnectKitButton />
+              <button
+                className="md:hidden grid h-10 w-10 place-items-center rounded-full text-[var(--color-muted-foreground)] hover:bg-[var(--color-muted)] hover:text-[var(--color-foreground)] cursor-pointer"
+                onClick={() => setMenuOpen(true)}
+                aria-label="Open menu"
+                aria-expanded={menuOpen}
+              >
+                <List size={22} aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </header>
 
         <WrongNetworkBanner />
 
-        {/* Page content */}
-        <main className="flex-1 p-4 md:p-6 overflow-auto">
-          <Outlet />
+        <main id="main" className="app-glow flex-1">
+          <div className="mx-auto max-w-[1240px] px-4 md:px-6 py-6 md:py-10">
+            <Outlet />
+          </div>
         </main>
-      </div>
 
-      {/* ── Mobile drawer ── */}
-      {menuOpen && (
-        <div className="fixed inset-0 z-50 flex md:hidden">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setMenuOpen(false)}
-            aria-hidden="true"
-          />
-          {/* Panel */}
-          <aside className="relative z-10 w-64 bg-[var(--color-card)] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-border)]">
-              <span className="font-heading text-lg text-[var(--color-primary)]"
-                    style={{ fontFamily: 'var(--font-heading)' }}>SteadFi</span>
-              <button onClick={() => setMenuOpen(false)} aria-label="Close menu"
-                      className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]">
-                <X size={20} />
-              </button>
-            </div>
-            <nav className="flex-1 py-3" aria-label="Mobile navigation">
-              {NAV.map(({ to, label, Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  onClick={() => setMenuOpen(false)}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-5 py-3 text-sm transition-base
-                     ${isActive
-                       ? 'text-[var(--color-primary)] font-semibold bg-[var(--color-muted)]'
-                       : 'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'
-                     }`
-                  }
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  {label}
-                </NavLink>
-              ))}
-            </nav>
-            <div className="px-4 pb-4 border-t border-[var(--color-border)] pt-3">
-              <a
-                href="https://faucet.circle.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-xs text-[var(--color-accent)] hover:underline"
-              >
-                <TestTube size={14} aria-hidden="true" />
-                Get testnet USDC
+        <footer className="border-t border-[var(--color-border)]">
+          <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-3 px-4 md:px-6 pt-5 pb-20 text-xs text-[var(--color-muted-foreground)]">
+            <span>SteadFi on Arc Testnet · Contracts not yet audited</span>
+            <div className="flex items-center gap-4">
+              <GasEstimate />
+              <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-foreground)]">
+                Testnet faucet <ArrowSquareOut size={11} aria-hidden="true" />
               </a>
             </div>
-          </aside>
-        </div>
-      )}
-    </div>
+          </div>
+        </footer>
+
+        {/* Mobile menu */}
+        <AnimatePresence>
+          {menuOpen && (
+            <div className="fixed inset-0 z-50 md:hidden">
+              <motion.div
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                onClick={() => setMenuOpen(false)}
+                aria-hidden="true"
+              />
+              <motion.aside
+                className="absolute right-0 top-0 h-full w-72 max-w-[85vw] border-l border-[var(--color-border)] bg-[var(--color-elevated)] flex flex-col"
+                initial={{ x: '100%' }} animate={{ x: 0, transition: { type: 'spring', stiffness: 380, damping: 38 } }}
+                exit={{ x: '100%', transition: { duration: 0.18 } }}
+                aria-label="Mobile navigation"
+              >
+                <div className="flex items-center justify-between px-5 h-16 border-b border-[var(--color-border)]">
+                  <Logo size={24} />
+                  <button onClick={() => setMenuOpen(false)} aria-label="Close menu"
+                    className="grid h-10 w-10 place-items-center rounded-full text-[var(--color-muted-foreground)] hover:bg-[var(--color-muted)] cursor-pointer">
+                    <X size={20} aria-hidden="true" />
+                  </button>
+                </div>
+                <nav className="flex-1 p-3">
+                  {NAV.map(({ to, label }) => (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      className={({ isActive }) =>
+                        `flex h-12 items-center rounded-xl px-4 text-[15px] transition-base
+                         ${isActive ? 'bg-[var(--color-muted)] text-[var(--color-foreground)] font-semibold' : 'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'}`
+                      }
+                    >
+                      {label}
+                    </NavLink>
+                  ))}
+                </nav>
+                <div className="border-t border-[var(--color-border)] p-5 space-y-3">
+                  <GasEstimate />
+                  <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs text-[var(--color-primary)] hover:underline">
+                    <TestTube size={14} aria-hidden="true" /> Get testnet USDC
+                  </a>
+                </div>
+              </motion.aside>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    </ActionProvider>
   )
 }
