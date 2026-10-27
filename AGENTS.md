@@ -69,6 +69,11 @@ Previous pool `0x252E8662C945e340195B35816a3f9259CA264e8C` (2026-10-24) is super
 - Public Arc RPC returns HTTP 429 to parallel `eth_getLogs`; sequential calls are fine (~0.5s each). `src/lib/logs.ts` scans sequentially in 5k-block chunks, filters server-side by topic (History filters by the user), and checkpoints to localStorage after every chunk.
 - Production: set `VITE_ARC_RPC_URL` to a dedicated RPC provider (first in the fallback list). Add an indexer before history grows large.
 
+### Hosting (2026-10-27)
+- Web app on **Vercel** (`vercel.json`): `bun run build` → `dist`, SPA fallback to `index.html`, and `/arc-rpc` rewritten to the Arc RPC so the same-origin proxy in `src/config.ts` works in production too.
+- Keeper on **Render** as a background worker (`render.yaml`, Starter plan): `steadfi/keeper`, `npm run start:node` (tsx). `KEEPER_PRIVATE_KEY` / `PYTH_API_KEY` are set in the Render dashboard (`sync: false`). Run only one keeper at a time.
+- Never put secrets in `VITE_*` variables — they are bundled into the public JS.
+
 ### Protocol revenue — borrow (origination) fee (added 2026-10-26, live since redeploy)
 - `borrowFeeBps[asset]`: one-time fee added to the borrower's **debt** on every borrow (they receive the full amount); credited to `reservesRay`, collected on repay, withdrawn by OWNER via `withdrawReserves`.
 - Default 50 bps (0.5%) on USDC/EURC (`DeployPhase1.s.sol`); `setBorrowFee` (RISK_ADMIN) capped at `MAX_BORROW_FEE = 200` (2%). `previewBorrowFee(asset, amount)` rounds up.

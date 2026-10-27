@@ -1,0 +1,23 @@
+# Render Blueprint: SteadFi keeper (Pyth price pushes + liquidations).
+# The web app is hosted on Vercel (vercel.json); this is the only always-on process.
+services:
+  - type: worker
+    name: steadfi-keeper
+    runtime: node
+    plan: starter # background workers are not available on the free plan
+    rootDir: steadfi/keeper
+    buildCommand: npm install
+    startCommand: npm run start:node
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Secrets: entered in the Render dashboard on first deploy, never committed.
+      - key: KEEPER_PRIVATE_KEY
+        sync: false
+      - key: PYTH_API_KEY
+        sync: false
+      # Use a dedicated Arc RPC in production; the public one rate-limits.
+      - key: RPC_URL
+        value: https://rpc.testnet.arc.io
+      - key: POLL_INTERVAL_MS
+        value: "60000"
