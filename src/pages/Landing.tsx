@@ -58,7 +58,7 @@ export default function Landing() {
               </motion.p>
               <motion.h1 variants={reveal} initial="hidden" animate="show" custom={1}
                 className="mt-6 text-[44px] leading-[1.02] font-bold md:text-[68px] tracking-[-0.035em]">
-                Lend dollars.<br />Borrow against <span className="text-gradient">Bitcoin.</span>
+                Lend stablecoins.<br />Borrow against <span className="text-gradient">cirBTC/WETH.</span>
               </motion.h1>
               <motion.p variants={reveal} initial="hidden" animate="show" custom={2}
                 className="mt-6 max-w-xl text-lg leading-relaxed text-[var(--color-muted-foreground)]">

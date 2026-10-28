@@ -9,11 +9,11 @@ import { arcTestnet } from 'viem/chains'
 import { injected } from 'wagmi/connectors'
 import { registerChain } from './tracing'
 
-// In dev, reads go through the Vite proxy (/arc-rpc, see vite.config.ts) so they
-// are same-origin and cannot be blocked as cross-origin requests. Every public
-// Arc endpoint follows as a fallback, so one RPC returning 503 no longer leaves
-// balances and prices empty.
-const ARC_PROXY_URL = import.meta.env.DEV && typeof window !== 'undefined'
+// Reads go through a same-origin proxy (/arc-rpc: the Vite proxy in dev, a
+// rewrite in vercel.json in production) so they cannot be blocked as
+// cross-origin requests. Every public Arc endpoint follows as a fallback, so
+// one RPC returning 503 no longer leaves balances and prices empty.
+const ARC_PROXY_URL = typeof window !== 'undefined'
   ? `${window.location.origin}/arc-rpc`
   : null
 // Production: set VITE_ARC_RPC_URL to a dedicated RPC provider (or a same-origin
