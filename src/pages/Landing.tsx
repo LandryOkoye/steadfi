@@ -9,7 +9,6 @@ import {
   ArrowRight, ArrowsLeftRight, CalendarCheck, ChartLineUp, CurrencyCircleDollar, GasPump, LockKey,
   Note, ShieldCheck,
 } from '@phosphor-icons/react'
-import { NetworkArc } from '@web3icons/react'
 import Logo from '../components/ui/Logo'
 import TokenIcon, { TOKEN_NAMES } from '../components/ui/TokenIcon'
 import { useMarketData } from '../hooks/useSteadFi'
@@ -53,7 +52,7 @@ export default function Landing() {
               <motion.p variants={reveal} initial="hidden" animate="show" custom={0}
                 className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-white/70 py-1 pl-1 pr-3 text-xs font-medium text-[var(--color-muted-foreground)] shadow-sm">
                 <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--color-muted)]">
-                  <NetworkArc variant="branded" size={15} aria-hidden="true" />
+                  <span className="block h-3.5 w-3.5 rounded-full bg-[#6B21A8]" aria-hidden="true" />
                 </span>
                 Live on Arc Testnet · Gas paid in USDC
               </motion.p>

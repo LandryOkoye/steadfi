@@ -1,12 +1,4 @@
-/**
- * SteadFi — App root with React Router.
- * - `/`            public landing page (light theme)
- * - user app       inside AppShell (top nav): dashboard, markets, asset detail,
- *                  bridge, history. Supply/withdraw/borrow/repay are modals.
- * - `/admin/*`     admin console with its own shell, lazily loaded so the
- *                  public app never downloads admin code.
- * Old action routes (/supply, /borrow, …) redirect to the dashboard modal.
- */
+
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MotionConfig } from 'framer-motion'
