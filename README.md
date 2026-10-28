@@ -62,19 +62,20 @@ This project was built from start to finish in [Arc Studio](https://studio.arc.i
 
 | Contract | Address |
 |---|---|
-| LendingPool | `0x__MAINNET_LENDINGPOOL__` |
+| LendingPool | `0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652` |
 | Timelock | `0x__MAINNET_TIMELOCK__` |
-| IRM (stable) | `0x__MAINNET_IRM_STABLE__` |
-| IRM (collateral) | `0x__MAINNET_IRM_COLLATERAL__` |
-| PythOracleAdapter | `0x__MAINNET_ORACLE_ADAPTER__` |
-| sUSDC | `0x__MAINNET_sUSDC__` |
-| dUSDC | `0x__MAINNET_dUSDC__` |
+| IRM | `0x84393560Bc91a1C2eDea435dfdb704Ad17df0886` |
+| PythOracleAdapter | `0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B` |
+| sUSDC | `0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F` |
+| dUSDC | `0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433` |
 | sEURC | `0x__MAINNET_sEURC__` |
 | dEURC | `0x__MAINNET_dEURC__` |
-| sCIRBTC | `0x__MAINNET_sCIRBTC__` |
-| dCIRBTC | `0x__MAINNET_dCIRBTC__` |
+| EURC | `0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1` |
+| sCIRBTC | `0xe3e65b944aaa9c7B6fF632DDA7a36d2cE71ac672` |
+| dCIRBTC | `0x1f279771B5A0E38e68BC0EcaEC8C7827430Bf564` |
 | sWETH | `0x__MAINNET_sWETH__` |
 | dWETH | `0x__MAINNET_dWETH__` |
+| WETH | `0x128cC466B61f542da60c70e3aA11c10e19B84EDB    ` |
 
 ### Transaction hashes
 
