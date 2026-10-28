@@ -11,17 +11,18 @@ import { ArrowCounterClockwise } from '@phosphor-icons/react'
 import Button from './ui/Button'
 import TokenIcon from './ui/TokenIcon'
 import { SYMBOLS, useConfirmTx } from '../hooks/useSteadFi'
-import { ARC_TESTNET_CHAIN_ID, LEGACY_POOL, LENDING_POOL_ABI, TOKENS, type TokenSymbol, formatToken } from '../lib/steadfi'
+import { ARC_CHAIN_ID, LEGACY_POOL, LENDING_POOL_ABI, TOKENS, type TokenSymbol, formatToken } from '../lib/steadfi'
 import { errMsg, toastTx } from './actions/shared'
 
 export default function LegacyPoolNotice() {
   const { address } = useAccount()
+  // No legacy pool on mainnet — nothing to show.
   const reads = useReadContracts({
-    contracts: address ? SYMBOLS.flatMap(sym => ([
-      { address: LEGACY_POOL, abi: LENDING_POOL_ABI, functionName: 'getUserSupply' as const, args: [address, TOKENS[sym].address] as const, chainId: ARC_TESTNET_CHAIN_ID },
-      { address: LEGACY_POOL, abi: LENDING_POOL_ABI, functionName: 'getUserDebt' as const, args: [address, TOKENS[sym].address] as const, chainId: ARC_TESTNET_CHAIN_ID },
+    contracts: (address && LEGACY_POOL) ? SYMBOLS.flatMap(sym => ([
+      { address: LEGACY_POOL!, abi: LENDING_POOL_ABI, functionName: 'getUserSupply' as const, args: [address, TOKENS[sym].address] as const, chainId: ARC_CHAIN_ID },
+      { address: LEGACY_POOL!, abi: LENDING_POOL_ABI, functionName: 'getUserDebt' as const, args: [address, TOKENS[sym].address] as const, chainId: ARC_CHAIN_ID },
     ])) : [],
-    query: { enabled: !!address, refetchInterval: 30_000 },
+    query: { enabled: !!address && !!LEGACY_POOL, refetchInterval: 30_000 },
   })
   const { writeContractAsync } = useWriteContract()
   const confirm = useConfirmTx()
@@ -29,19 +30,20 @@ export default function LegacyPoolNotice() {
 
   const rows = SYMBOLS.map((sym, i) => ({
     sym,
-    supply: (reads.data?.[i * 2]?.result as bigint | undefined) ?? 0n,
-    debt: (reads.data?.[i * 2 + 1]?.result as bigint | undefined) ?? 0n,
+    supply: (reads.data?.[i * 2]?.result) ?? 0n,
+    debt: (reads.data?.[i * 2 + 1]?.result) ?? 0n,
   }))
   const supplied = rows.filter(r => r.supply > 0n)
   const hasDebt = rows.some(r => r.debt > 0n)
   if (!address || supplied.length === 0) return null
 
   async function withdraw(sym: TokenSymbol, amount: bigint) {
+    if (!LEGACY_POOL) return
     setBusy(sym)
     try {
       const hash = await writeContractAsync({
         address: LEGACY_POOL, abi: LENDING_POOL_ABI, functionName: 'withdraw',
-        args: [TOKENS[sym].address, amount], chainId: ARC_TESTNET_CHAIN_ID,
+        args: [TOKENS[sym].address, amount], chainId: ARC_CHAIN_ID,
       })
       await confirm(hash)
       toastTx(`Withdrew ${formatToken(amount, TOKENS[sym].decimals)} ${sym} from the previous pool`, hash)

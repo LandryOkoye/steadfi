@@ -1,26 +1,69 @@
 /**
- * SteadFi deployed contract addresses and ABIs for Arc Testnet.
- * All addresses verified from deployments/testnet.json (pool redeployed 2026-10-26).
+ * SteadFi deployed contract addresses and ABIs.
+ * Supports Arc Mainnet (chain 5042) and Arc Testnet (chain 5042002).
+ * Active network is selected by VITE_NETWORK=mainnet|testnet (default mainnet).
  * Never hardcode addresses elsewhere — import from here.
  */
 
-export const ARC_TESTNET_CHAIN_ID = 5042002
+// ── Network selection ─────────────────────────────────────────────────────────
+
+const _network = String(import.meta.env.VITE_NETWORK ?? 'mainnet').toLowerCase()
+export const IS_MAINNET = _network !== 'testnet'
 
 /**
- * Block containing the current LendingPool deployment. The History page scans
- * logs from this block to the chain head in ≤5,000-block chunks (the Arc RPC
- * rejects larger eth_getLogs ranges).
+ * Chain ID of the active network.
+ * 5042    = Arc Mainnet
+ * 5042002 = Arc Testnet
+ *
+ * Renamed from ARC_CHAIN_ID so it works for both networks.
+ * @deprecated ARC_CHAIN_ID is an alias kept for any code not yet updated.
  */
-export const POOL_DEPLOY_BLOCK = 69_205_409n
+export const ARC_CHAIN_ID: number = IS_MAINNET ? 5042 : 5042002
 
-/**
- * The previous LendingPool (2026-10-24, superseded 2026-10-26). Users may still
- * have funds there; the dashboard offers a one-click withdrawal from it.
- */
-export const LEGACY_POOL = '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x${string}`
+/** @deprecated Alias for backward compat — use ARC_CHAIN_ID */
+export const ARC_TESTNET_CHAIN_ID: number = IS_MAINNET ? 5042 : 5042002
 
-// ── Token addresses (Arc Testnet) ─────────────────────────────────────────────
-export const TOKENS = {
+export const NETWORK_NAME = IS_MAINNET ? 'Arc' : 'Arc Testnet'
+
+// ── Mainnet addresses ─────────────────────────────────────────────────────────
+
+const MAINNET_TOKENS = {
+  USDC: {
+    address: '0x3600000000000000000000000000000000000000' as `0x${string}`,
+    decimals: 6,
+    symbol: 'USDC',
+    collateralEnabled: false,
+    borrowEnabled: true,
+  },
+  cirBTC: {
+    address: '0x171A4217b86A807A64eB94757Db6849fb4bDbAA0' as `0x${string}`,
+    decimals: 8,
+    symbol: 'cirBTC',
+    collateralEnabled: true,
+    borrowEnabled: false,
+  },
+} as const
+
+const MAINNET_CONTRACTS = {
+  LendingPool:  '0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652' as `0x${string}`,
+  Timelock:     null as `0x${string}` | null,  // No Timelock on mainnet v1
+  PythOracle:   '0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B' as `0x${string}`,
+  sUSDC:   '0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F' as `0x${string}`,
+  sEURC:   null as `0x${string}` | null,
+  sCIRBTC: '0xe3e65b944aaa9c7B6fF632DDA7a36d2cE71ac672' as `0x${string}`,
+  sWETH:   null as `0x${string}` | null,
+  dUSDC:   '0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433' as `0x${string}`,
+  dEURC:   null as `0x${string}` | null,
+  dCIRBTC: '0x1f279771B5A0E38e68BC0EcaEC8C7827430Bf564' as `0x${string}`,
+  dWETH:   null as `0x${string}` | null,
+} as const
+
+const MAINNET_POOL_DEPLOY_BLOCK = 28_392_864n
+const MAINNET_LEGACY_POOL = null as `0x${string}` | null
+
+// ── Testnet addresses ─────────────────────────────────────────────────────────
+
+const TESTNET_TOKENS = {
   USDC: {
     address: '0x3600000000000000000000000000000000000000' as `0x${string}`,
     decimals: 6,
@@ -51,42 +94,100 @@ export const TOKENS = {
   },
 } as const
 
-export type TokenSymbol = keyof typeof TOKENS
-
-export const COLLATERAL_TOKENS: TokenSymbol[] = ['cirBTC', 'WETH']
-export const BORROW_TOKENS: TokenSymbol[] = ['USDC', 'EURC']
-
-// ── Protocol contract addresses ────────────────────────────────────────────────
-export const CONTRACTS = {
+const TESTNET_CONTRACTS = {
   LendingPool:  '0x57E1066DA815DD1c1DD1adA82859729ce7f82989' as `0x${string}`,
   Timelock:     '0x6C50DDcf4CAf08C8C41644b9372a1B2c1f245947' as `0x${string}`,
   PythOracle:   '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730' as `0x${string}`,
-  // sTokens (supply receipt)
   sUSDC:   '0x8e48bC49b0D356467c97c6A0C3Fb27f1d5407836' as `0x${string}`,
   sEURC:   '0x2aa7BcE6187CBCb3636b24a0a955b390a2b04E2f' as `0x${string}`,
   sCIRBTC: '0xa01abcae53928d48113487228f21943106C826cc' as `0x${string}`,
   sWETH:   '0xcd04ECa348427B272cEEead3973a7aFd7Ca270B6' as `0x${string}`,
-  // debtTokens
   dUSDC:   '0x3C757dd39e31E2887791Ee247421d389cdAa197C' as `0x${string}`,
   dEURC:   '0x3173b17F76401a2a7295EEF464A12b13cC35F870' as `0x${string}`,
   dCIRBTC: '0x32332a2b83dE3a4Bd758Ea24F81d362D28918880' as `0x${string}`,
   dWETH:   '0x770ec4BDe6E655893C7bb3B8288Ec57732ed9F83' as `0x${string}`,
 } as const
 
-// Map token symbol to its sToken address
-export const S_TOKEN_ADDRESS: Record<TokenSymbol, `0x${string}`> = {
-  USDC:   CONTRACTS.sUSDC,
-  EURC:   CONTRACTS.sEURC,
-  cirBTC: CONTRACTS.sCIRBTC,
-  WETH:   CONTRACTS.sWETH,
+const TESTNET_POOL_DEPLOY_BLOCK = 69_205_409n
+const TESTNET_LEGACY_POOL = '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x${string}`
+
+// ── Active exports ─────────────────────────────────────────────────────────────
+
+/**
+ * Token definitions for the active network.
+ * On mainnet: USDC + cirBTC only.
+ * On testnet: USDC + EURC + cirBTC + WETH.
+ */
+export const TOKENS = (IS_MAINNET ? MAINNET_TOKENS : TESTNET_TOKENS) as typeof TESTNET_TOKENS
+
+export type TokenSymbol = keyof typeof TOKENS
+
+export const COLLATERAL_TOKENS: TokenSymbol[] = IS_MAINNET
+  ? ['cirBTC']
+  : ['cirBTC', 'WETH']
+
+export const BORROW_TOKENS: TokenSymbol[] = IS_MAINNET
+  ? ['USDC']
+  : ['USDC', 'EURC']
+
+/** All symbols for the active network — drives market lists, hooks, admin pages. */
+export const SYMBOLS: TokenSymbol[] = IS_MAINNET
+  ? ['USDC', 'cirBTC']
+  : ['USDC', 'EURC', 'cirBTC', 'WETH']
+
+export const CONTRACTS = (IS_MAINNET ? MAINNET_CONTRACTS : TESTNET_CONTRACTS)
+
+export const POOL_DEPLOY_BLOCK = IS_MAINNET ? MAINNET_POOL_DEPLOY_BLOCK : TESTNET_POOL_DEPLOY_BLOCK
+
+/**
+ * Previous LendingPool (testnet only — superseded 2026-10-24).
+ * Null on mainnet (no legacy pool).
+ */
+export const LEGACY_POOL = IS_MAINNET ? MAINNET_LEGACY_POOL : TESTNET_LEGACY_POOL
+
+// Map token symbol to its sToken address (only non-null entries)
+export const S_TOKEN_ADDRESS: Partial<Record<TokenSymbol, `0x${string}`>> = Object.fromEntries(
+  SYMBOLS
+    .map(sym => {
+      const key = `s${sym === 'cirBTC' ? 'CIRBTC' : sym}` as keyof typeof CONTRACTS
+      const addr = CONTRACTS[key]
+      return addr ? [sym, addr] : null
+    })
+    .filter(Boolean) as [TokenSymbol, `0x${string}`][]
+)
+
+// Map token symbol to its debtToken address (only non-null entries)
+export const D_TOKEN_ADDRESS: Partial<Record<TokenSymbol, `0x${string}`>> = Object.fromEntries(
+  SYMBOLS
+    .map(sym => {
+      const key = `d${sym === 'cirBTC' ? 'CIRBTC' : sym}` as keyof typeof CONTRACTS
+      const addr = CONTRACTS[key]
+      return addr ? [sym, addr] : null
+    })
+    .filter(Boolean) as [TokenSymbol, `0x${string}`][]
+)
+
+// ── Explorer ───────────────────────────────────────────────────────────────────
+
+export const EXPLORER_BASE = IS_MAINNET
+  ? 'https://explorer.arc.io'
+  : 'https://explorer.testnet.arc.io'
+
+export function txUrl(hash: string): string {
+  return `${EXPLORER_BASE}/tx/${hash}`
 }
 
-// Map token symbol to its debtToken address
-export const D_TOKEN_ADDRESS: Record<TokenSymbol, `0x${string}`> = {
-  USDC:   CONTRACTS.dUSDC,
-  EURC:   CONTRACTS.dEURC,
-  cirBTC: CONTRACTS.dCIRBTC,
-  WETH:   CONTRACTS.dWETH,
+export function addrUrl(address: string): string {
+  return `${EXPLORER_BASE}/address/${address}`
+}
+
+// ── CCTP (testnet only) ────────────────────────────────────────────────────────
+
+/** CCTP contracts for Arc Testnet (domain 26). Not available on mainnet. */
+export const CCTP = IS_MAINNET ? null : {
+  TokenMessengerV2: '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA' as `0x${string}`,
+  MessageTransmitterV2: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275' as `0x${string}`,
+  domain: 26,
 }
 
 // ── ABIs (minimal — only functions the UI needs) ──────────────────────────────
@@ -483,20 +584,3 @@ export function usdFromTokenAmount(amount: bigint, decimals: number, price18: bi
 
 /** uint256 max for approvals */
 export const MAX_UINT256 = 2n ** 256n - 1n
-
-// ── Arc Testnet CCTP addresses (docs.arc.io 2026-10-22) ────────────────────────
-export const CCTP = {
-  TokenMessengerV2: '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA' as `0x${string}`,
-  MessageTransmitterV2: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275' as `0x${string}`,
-  domain: 26,
-}
-
-export const EXPLORER_BASE = 'https://explorer.testnet.arc.io'
-
-export function txUrl(hash: string): string {
-  return `${EXPLORER_BASE}/tx/${hash}`
-}
-
-export function addrUrl(address: string): string {
-  return `${EXPLORER_BASE}/address/${address}`
-}

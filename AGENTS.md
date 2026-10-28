@@ -119,6 +119,61 @@ Previous pool `0x252E8662C945e340195B35816a3f9259CA264e8C` (2026-10-24) is super
 
 ---
 
+## SteadFi Arc Mainnet — Deployed 2026-10-28
+
+### Decision log
+- Lean hackathon scope: 2 markets (USDC + cirBTC), no Timelock, deployer holds all roles, single BTC/USD feed (Pyth Pro feed id 1).
+- No EURC or WETH on mainnet (CCTP testnet addresses, no mainnet contracts confirmed in scope).
+- 0.5% borrow fee on USDC only (same as testnet). cirBTC caps: 0.25 cirBTC supply, no separate borrow cap.
+- `VITE_NETWORK=mainnet` activates mainnet address set, hides Bridge tab, shows "Arc" in NetworkBadge.
+- `render.yaml` is unused (keeper is run manually); marked with comment.
+- RPC proxy target in `vite.config.ts` and `vercel.json` updated to `rpc.mainnet.arc.io`.
+- All `ARC_TESTNET_CHAIN_ID` references renamed to `ARC_CHAIN_ID` (backward-compat alias kept).
+
+### Arc Mainnet Contracts (chain 5042)
+Deploy block: `28392864` (0x1b099a0). Deployer: `0xbDD5A7a963EcA056f5A416268B1C2AC833E3e432`. Gas spent: ~0.2157 USDC.
+
+| Contract | Address | Tx hash |
+|---|---|---|
+| LendingPool | `0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652` | `0x73bada35d44104f5af7f5675147336669e87148c5ff812317bf53878a901ea55` |
+| InterestRateModel | `0x84393560Bc91a1C2eDea435dfdb704Ad17df0886` | `0xb088c485f8dd3038bfe91f3192b8b62905c4edfbda5e8ebb21438009a13f6bb7` |
+| PythOracleAdapter | `0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B` | `0xd5ddc8c7e473793b8badc6b36df9f0528fab6c26916a6b84a6490635976cd51e` |
+| sUSDC | `0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F` | `0x384689fa99bcc742ff392e50253dc61988fd8ff929f12dfd9441ef58770ff907` |
+| dUSDC | `0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433` | `0x283a9223d0e5847722b641328109cb6407cbe3db83e58d9926af4a159c8167d4` |
+| sCIRBTC | `0xe3e65b944aaa9c7B6fF632DDA7a36d2cE71ac672` | `0x6849d1c3e097a9512535e4c5356799e73d62694d091ec061ddff3bb5f5acd563` |
+| dCIRBTC | `0x1f279771B5A0E38e68BC0EcaEC8C7827430Bf564` | `0x5ca83f0af99b91d09d04083ea27538e9fa9f72b112b427dc4ad1444e8fe0e2d5` |
+
+No Timelock on mainnet. Deployer address holds OWNER_ROLE, RISK_ADMIN, and PAUSE_GUARDIAN.
+
+### Mainnet token addresses
+- USDC: `0x3600000000000000000000000000000000000000` (6 dec)
+- cirBTC: `0x171A4217b86A807A64eB94757Db6849fb4bDbAA0` (8 dec)
+
+### Pyth Pro on mainnet
+- Verifier: `0xACeA761c27A909d4D3895128EBe6370FDE2dF481`
+- Adapter: `0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B` (same as testnet pattern)
+- Feed: BTC/USD (id 1), maxAge 300s
+
+### Keeper (mainnet)
+Run manually from a laptop. **Do not** point the keeper at mainnet with the Render worker.
+```bash
+# From steadfi/keeper/
+NETWORK=mainnet bun run src/keeper.ts
+# or for a single cycle:
+NETWORK=mainnet RUN_ONCE=1 bun run src/keeper.ts
+```
+Keeper wallet must have enough USDC for gas. Balance check: `cast balance $KEEPER_ADDRESS --rpc-url https://rpc.mainnet.arc.io --ether`
+
+### Source files (mainnet-aware)
+- `steadfi/contracts/script/DeployMainnet.s.sol` — mainnet deploy script
+- `steadfi/contracts/deployments/mainnet.json` — full mainnet deployment manifest
+- `src/lib/steadfi.ts` — dual network address sets; `VITE_NETWORK=mainnet|testnet`
+- `src/config.ts` — active chain, active RPC
+- `vite.config.ts` — proxy target (mainnet by default)
+- `vercel.json` — `/arc-rpc` rewrite to mainnet RPC
+
+---
+
 ## What This App Does
 
 [Brief description of what the app does and its primary use case]

@@ -5,7 +5,7 @@
   "buildCommand": "bun run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/arc-rpc", "destination": "https://rpc.testnet.arc.io/" },
+    { "source": "/arc-rpc", "destination": "https://rpc.mainnet.arc.io/" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [

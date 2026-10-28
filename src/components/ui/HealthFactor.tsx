@@ -38,7 +38,7 @@ export default function HealthFactor({ value, preview, size = 'lg', bare = false
   const noDebt = value === Infinity
   const b = hfBand(value)
   const showPreview = preview !== null && preview !== undefined && preview !== value
-  const pb = showPreview ? hfBand(preview!) : null
+  const pb = showPreview ? hfBand(preview) : null
 
   return (
     <div className="w-full">
@@ -48,7 +48,7 @@ export default function HealthFactor({ value, preview, size = 'lg', bare = false
         </span>
         {showPreview && pb && (
           <span className={clsx('mono font-semibold', pb.cls, size === 'lg' ? 'text-xl' : 'text-sm')}>
-            → {formatHf(preview!)}
+            → {formatHf(preview)}
           </span>
         )}
         {/* With a preview, label the resulting state; otherwise the current one. */}
@@ -68,7 +68,7 @@ export default function HealthFactor({ value, preview, size = 'lg', bare = false
           <div className="relative mt-3 h-1.5 rounded-full bg-[linear-gradient(90deg,var(--color-destructive)_0%,var(--color-warning)_35%,var(--color-success)_70%)] opacity-90">
             <div
               className="absolute top-1/2 h-3.5 w-1 -translate-y-1/2 rounded-full bg-[var(--color-foreground)] shadow-[0_0_0_3px_var(--color-card)] transition-all duration-500"
-              style={{ left: `calc(${gaugePct(showPreview ? preview! : value)}% - 2px)` }}
+              style={{ left: `calc(${gaugePct(showPreview ? preview : value)}% - 2px)` }}
             />
           </div>
           <div className="mt-1.5 flex justify-between text-[11px] text-[var(--color-muted-foreground)]">

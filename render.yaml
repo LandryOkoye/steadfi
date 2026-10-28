@@ -1,3 +1,5 @@
+# UNUSED — keeper is run manually from a laptop (see AGENTS.md).
+# Left here for reference if Render hosting is ever set up.
 # Render Blueprint: SteadFi keeper (Pyth price pushes + liquidations).
 # The web app is hosted on Vercel (vercel.json); this is the only always-on process.
 services:

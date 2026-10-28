@@ -19,7 +19,7 @@ import {
   borrowRateAt, useBorrowFee, useMarketData, useRateModel, useTokenBalance, useUserPosition,
 } from '../hooks/useSteadFi'
 import {
-  ARC_TESTNET_CHAIN_ID, CONTRACTS, LENDING_POOL_ABI, TOKENS, type TokenSymbol, addrUrl, formatToken,
+  ARC_CHAIN_ID, CONTRACTS, LENDING_POOL_ABI, TOKENS, type TokenSymbol, addrUrl, formatToken,
 } from '../lib/steadfi'
 import { compactAmount, compactUsd } from './Markets'
 
@@ -40,7 +40,7 @@ function AssetView({ symbol }: { symbol: TokenSymbol }) {
   const m = markets.find(x => x.symbol === symbol)
   const cfgRead = useReadContract({
     address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketConfig',
-    args: [token.address], chainId: ARC_TESTNET_CHAIN_ID,
+    args: [token.address], chainId: ARC_CHAIN_ID,
   })
   const cfg = cfgRead.data as ConfigView | undefined
   const { feeBps } = useBorrowFee(symbol)
@@ -223,7 +223,7 @@ function RateChart({ model, currentUtil }: { model: Parameters<typeof borrowRate
               cursor={{ stroke: 'var(--color-border-strong)', strokeWidth: 1 }}
               content={({ active, payload }) => active && payload?.length ? (
                 <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-elevated)] px-3 py-2 text-xs shadow-[var(--shadow-pop)]">
-                  <p className="text-[var(--color-muted-foreground)]">Utilization {payload[0].payload.u}%</p>
+                  <p className="text-[var(--color-muted-foreground)]">Utilization {(payload[0].payload as { u?: number }).u}%</p>
                   <p className="mono font-semibold text-[var(--color-foreground)]">Borrow APR {Number(payload[0].value).toFixed(2)}%</p>
                 </div>
               ) : null}

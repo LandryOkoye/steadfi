@@ -20,13 +20,15 @@ import MarketsAdmin from './pages/MarketsAdmin'
 import Treasury from './pages/Treasury'
 import Access from './pages/Access'
 import Governance from './pages/Governance'
+import { CONTRACTS } from '../lib/steadfi'
 
 const NAV = [
   { to: '/admin/overview',   label: 'Overview',   Icon: ChartLineUp },
   { to: '/admin/markets',    label: 'Markets',    Icon: SlidersHorizontal },
   { to: '/admin/treasury',   label: 'Treasury',   Icon: Vault },
   { to: '/admin/access',     label: 'Access',     Icon: UsersThree },
-  { to: '/admin/governance', label: 'Timelock',   Icon: Clock },
+  // Governance/Timelock tab hidden when no Timelock contract (e.g. mainnet).
+  ...(CONTRACTS.Timelock ? [{ to: '/admin/governance', label: 'Timelock', Icon: Clock }] : []),
 ]
 
 function AdminShell() {

@@ -5,12 +5,12 @@
 import { GasPump } from '@phosphor-icons/react'
 import { useGasPrice } from 'wagmi'
 import { formatUnits } from 'viem'
-import { ARC_TESTNET_CHAIN_ID } from '../../lib/steadfi'
+import { ARC_CHAIN_ID } from '../../lib/steadfi'
 
 const TYPICAL_GAS = 300_000n
 
 export default function GasEstimate() {
-  const { data: gasPrice } = useGasPrice({ chainId: ARC_TESTNET_CHAIN_ID })
+  const { data: gasPrice } = useGasPrice({ chainId: ARC_CHAIN_ID })
   const cost = gasPrice ? Number(formatUnits(gasPrice * TYPICAL_GAS, 18)) : null
 
   return (

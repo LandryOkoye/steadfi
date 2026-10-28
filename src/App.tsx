@@ -16,11 +16,12 @@ import Landing     from './pages/Landing'
 import Dashboard   from './pages/Dashboard'
 import Markets     from './pages/Markets'
 import History     from './pages/History'
+import { IS_MAINNET } from './lib/steadfi'
 
 const AdminApp = lazy(() => import('./admin/AdminApp'))
 // Asset pages carry the charting library; load it only when one is opened.
 const AssetDetail = lazy(() => import('./pages/AssetDetail'))
-// Bridge pulls in Circle's App Kit (large); load it on demand too.
+// Bridge is testnet-only: not shown on mainnet.
 const Bridge = lazy(() => import('./pages/Bridge'))
 
 const ACTION_REDIRECTS = ['supply', 'borrow', 'repay', 'withdraw'] as const
@@ -45,7 +46,9 @@ export default function App() {
               <Route path="markets"          element={<Markets />} />
               <Route path="markets/:symbol"  element={<Suspense fallback={<div className="skeleton h-96 w-full" />}><AssetDetail /></Suspense>} />
               <Route path="history"          element={<History />} />
-              <Route path="bridge"           element={<Suspense fallback={<div className="skeleton h-96 w-full" />}><Bridge /></Suspense>} />
+              {!IS_MAINNET && (
+                <Route path="bridge" element={<Suspense fallback={<div className="skeleton h-96 w-full" />}><Bridge /></Suspense>} />
+              )}
               {ACTION_REDIRECTS.map(a => (
                 <Route key={a} path={a} element={<Navigate to={`/dashboard?action=${a}`} replace />} />
               ))}
