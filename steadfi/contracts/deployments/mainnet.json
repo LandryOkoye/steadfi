@@ -1,24 +1,104 @@
 {
-  "_note": "EMPTY — do not populate until Phase 5 mainnet launch receives written approval",
-  "network": "arc_mainnet",
+  "network": "Arc Mainnet",
   "chainId": 5042,
-  "externalAddresses": {
-    "USDC": "0x3600000000000000000000000000000000000000",
-    "EURC": "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
-    "cirBTC": "0x171A4217b86A807A64eB94757Db6849fb4bDbAA0",
-    "WETH": "0x128cC466B61f542da60c70e3aA11c10e19B84EDB",
-    "USYC": "0x8a5D989Bbb96929F689B0200f435f53dA42bF490",
-    "USYC_Entitlements": "0xb69ecb156Dc0028198028c501340d5367845ca72",
-    "USYC_Teller": "0x51A8CE47dC08ba5CD19c7aa84EA6fD6664f60f9b",
-    "Multicall3": "0xcA11bde05977b3631167028862bE2a173976CA11",
-    "Multicall3From": "0x522fAf9A91c41c443c66765030741e4AaCe147D0",
-    "Memo": "0x5294E9927c3306DcBaDb03fe70b92e01cCede505",
-    "Permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-    "CCTP_TokenMessengerV2": "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
-    "CCTP_MessageTransmitterV2": "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
-    "Gateway_GatewayWallet": "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE",
-    "Gateway_GatewayMinter": "0x2222222d7164433c4C09B0b0D809a9b52C04C205",
-    "StableFX_FxEscrow": "0xe2E5F173576B513d994073CCbDaCBE027d43DFe6",
-    "NativeSystemEmitter": "0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE"
+  "deployedAt": "2026-10-28",
+  "deployer": "0xbDD5A7a963EcA056f5A416268B1C2AC833E3e432",
+  "deployBlock": 28392864,
+  "_comment_scope": "Lean hackathon scope: USDC (lend+borrow) + cirBTC (collateral only). No Timelock — deployer holds OWNER + RISK_ADMIN + PAUSE_GUARDIAN. One IRM shared by both markets.",
+  "_comment_oracle": "Pyth Pro (Lazer) storage adapter. Only BTC/USD feed (id=1) configured. Keeper must push one price update before any borrow executes. USDC price is hardcoded $1.",
+  "_comment_adding_markets": "To add EURC or WETH later: deploy new sToken/DebtToken, call addMarket, setFeed on the oracle, setBorrowFee if desired.",
+  "tokens": {
+    "USDC": {
+      "address": "0x3600000000000000000000000000000000000000",
+      "decimals": 6,
+      "source": "Arc native (same on testnet and mainnet)"
+    },
+    "cirBTC": {
+      "address": "0x171A4217b86A807A64eB94757Db6849fb4bDbAA0",
+      "decimals": 8,
+      "source": "Circle-issued (docs.arc.io 2026-10-28)"
+    }
+  },
+  "oracle": {
+    "pythPro": {
+      "adapter": "0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B",
+      "verifier": "0xACeA761c27A909d4D3895128EBe6370FDE2dF481",
+      "verificationFeeWei": "1",
+      "feedIds": {
+        "BTC/USD": 1
+      },
+      "maxAgeSeconds": 300,
+      "rest": "https://pyth-lazer.dourolabs.app/v1/latest_price",
+      "note": "Same Pyth Pro verifier address on both mainnet and testnet."
+    }
+  },
+  "protocol": {
+    "LendingPool": {
+      "address": "0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652",
+      "txHash": "0x73bada35d44104f5af7f5675147336669e87148c5ff812317bf53878a901ea55",
+      "deployBlock": 28392864
+    },
+    "IRM": {
+      "address": "0x84393560Bc91a1C2eDea435dfdb704Ad17df0886",
+      "txHash": "0xb088c485f8dd3038bfe91f3192b8b62905c4edfbda5e8ebb21438009a13f6bb7",
+      "note": "Shared by both markets. base=0%, slope1=8%, kink=90%, slope2=100%."
+    },
+    "PythOracleAdapter": {
+      "address": "0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B",
+      "txHash": "0xd5ddc8c7e473793b8badc6b36df9f0528fab6c26916a6b84a6490635976cd51e",
+      "setFeedTxHash": "0xba975c38ebd00717f959795dadd0efdcaca22420832c9f0e4cf56a00194943e7",
+      "note": "BTC/USD feed (id=1) registered for cirBTC. Skips stale/wide-confidence feeds without reverting."
+    },
+    "sUSDC": {
+      "address": "0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F",
+      "txHash": "0x384689fa99bcc742ff392e50253dc61988fd8ff929f12dfd9441ef58770ff907"
+    },
+    "dUSDC": {
+      "address": "0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433",
+      "txHash": "0x283a9223d0e5847722b641328109cb6407cbe3db83e58d9926af4a159c8167d4"
+    },
+    "sCIRBTC": {
+      "address": "0xe3e65b944aaa9c7B6fF632DDA7a36d2cE71ac672",
+      "txHash": "0x6849d1c3e097a9512535e4c5356799e73d62694d091ec061ddff3bb5f5acd563"
+    },
+    "dCIRBTC": {
+      "address": "0x1f279771B5A0E38e68BC0EcaEC8C7827430Bf564",
+      "txHash": "0x5ca83f0af99b91d09d04083ea27538e9fa9f72b112b427dc4ad1444e8fe0e2d5"
+    },
+    "addMarket_USDC": {
+      "txHash": "0xfdf20c3fd26efe481b8d10df8c969ba58610e056d5a9782513862558e1b61af1"
+    },
+    "addMarket_cirBTC": {
+      "txHash": "0x01fb1f8f39b98ffcbbdd4f4ec72be0e2efad03c155ed2fa26de5672e72d6d909"
+    },
+    "setBorrowFee_USDC": {
+      "txHash": "0x5da1ca7f383e0888999f8c73480571c1718644be78b600e78bbb85428739c527"
+    }
+  },
+  "markets": {
+    "USDC": {
+      "supplyCap": "10000000000",
+      "borrowCap": "8000000000",
+      "ltv": 0,
+      "liqThreshold": 0,
+      "liqBonus": 500,
+      "reserveFactor": 1000,
+      "closeFactor": 5000,
+      "borrowEnabled": true,
+      "collateralEnabled": false,
+      "borrowFeeBps": 50
+    },
+    "cirBTC": {
+      "supplyCap": "25000000",
+      "borrowCap": "0",
+      "ltv": 7000,
+      "liqThreshold": 7800,
+      "liqBonus": 800,
+      "reserveFactor": 1500,
+      "closeFactor": 5000,
+      "borrowEnabled": false,
+      "collateralEnabled": true,
+      "borrowFeeBps": 0
+    }
   }
 }

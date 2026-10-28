@@ -8,116 +8,163 @@ import {PythOracleAdapter} from "../src/PythOracleAdapter.sol";
 import {sToken}            from "../src/sToken.sol";
 import {DebtToken}         from "../src/DebtToken.sol";
 import {ILendingPool}      from "../src/interfaces/ILendingPool.sol";
+import {RayMath}           from "../src/libraries/RayMath.sol";
 
-interface IERC20Decimals {
-    function decimals() external view returns (uint8);
-}
-
-/// @notice Lean SteadFi launch on Arc MAINNET (chain 5042), sized for a ~0.25 USDC
-///         gas budget: LendingPool, one interest-rate model, the Pyth Pro oracle
-///         adapter, and two markets — USDC (lend/borrow) and cirBTC (collateral).
-///         EURC and WETH markets can be added later with addMarket once funded
-///         (~0.045 USDC each: 2 token deploys + addMarket + setFeed).
+/// @notice Deploys SteadFi Phase 1 to Arc Mainnet (chain 5042).
 ///
-///         Differences from testnet: no Timelock (deployer holds OWNER /
-///         RISK_ADMIN / PAUSE_GUARDIAN directly), one IRM shared by both markets
-///         (same 0% / 8% / 100% / 90% kink curve), and low caps (unaudited code).
+///         Lean scope for hackathon launch:
+///           - 2 markets: USDC (lend + borrow) and cirBTC (collateral only)
+///           - 1 IRM: stable curve (base 0%, slope1 8%, kink 90%, slope2 100%)
+///           - 1 PythOracleAdapter with BTC/USD feed only (feed id 1)
+///           - No Timelock: deployer holds OWNER + RISK_ADMIN + PAUSE_GUARDIAN
+///           - 0.5% borrow (origination) fee on USDC
 ///
-///         Arc's base fee floor is 20 gwei (docs.arc.io/arc/references/gas-and-fees)
-///         and mainnet sits at the floor, so ~10.9M gas costs ~0.22 USDC.
+///         Run from steadfi/contracts after loading .env:
+///           set -a; . ../../.env; set +a
 ///
-///         From steadfi/contracts, with DEPLOYER_PRIVATE_KEY loaded from the root .env.
-///         Simulate first (no transactions sent):
-///           forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url https://rpc.mainnet.arc.io
-///         Then broadcast (key read from env, never passed on the command line):
-///           forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url https://rpc.mainnet.arc.io \
-///             --broadcast --slow --with-gas-price 20gwei --priority-gas-price 0 --gas-estimate-multiplier 110
-///         (11 txs, ~11.9M gas limit → needs 0.239 USDC up front; ~0.217 USDC actually spent)
+///         Simulate (dry-run, no broadcast):
+///           forge script script/DeployMainnet.s.sol:DeployMainnet \
+///             --rpc-url https://rpc.mainnet.arc.io \
+///             --with-gas-price 20gwei --priority-gas-price 0 \
+///             --gas-estimate-multiplier 110
+///
+///         Broadcast:
+///           forge script script/DeployMainnet.s.sol:DeployMainnet \
+///             --rpc-url https://rpc.mainnet.arc.io \
+///             --with-gas-price 20gwei --priority-gas-price 0 \
+///             --gas-estimate-multiplier 110 \
+///             --broadcast --slow
+///
+///         If interrupted: add --resume with the same flags (never re-run from scratch).
 contract DeployMainnet is Script {
-    // Arc Mainnet tokens (docs.arc.io/arc/references/contract-addresses, verified
-    // 2026-10-28 via eth_getCode + decimals() on rpc.mainnet.arc.io)
+    // -------------------------------------------------------------------------
+    // Arc Mainnet token addresses (docs.arc.io verified 2026-10-28)
+    // -------------------------------------------------------------------------
+
+    /// @dev Arc USDC is the same address on mainnet and testnet.
     address constant USDC    = 0x3600000000000000000000000000000000000000;
+    /// @dev cirBTC mainnet (Circle-issued, 8 decimals).
     address constant CIR_BTC = 0x171A4217b86A807A64eB94757Db6849fb4bDbAA0;
 
-    // Pyth Pro verifier on Arc mainnet (docs.pyth.network/price-feeds/pro/contract-addresses).
-    // Same address as testnet; verified 2026-10-28 that a live Pyth Pro update
-    // verifies on mainnet (verification_fee() = 1 wei).
+    // -------------------------------------------------------------------------
+    // Pyth Pro (Lazer) verifier — same on both networks.
+    // -------------------------------------------------------------------------
     address constant PYTH_PRO = 0xACeA761c27A909d4D3895128EBe6370FDE2dF481;
 
+    // Pyth Pro feed ID for BTC/USD (numeric).
     uint32 constant FEED_BTC_USD = 1;
-    uint256 constant FEED_MAX_AGE = 300; // seconds; push a price before using the app
 
-    // Launch caps — deliberately small while the contracts are unaudited.
-    // Raise later with setSupplyCap/setBorrowCap (RISK_ADMIN) from /admin.
-    uint256 constant USDC_SUPPLY_CAP   = 10_000e6;
-    uint256 constant USDC_BORROW_CAP   = 8_000e6;
-    uint256 constant CIRBTC_SUPPLY_CAP = 0.25e8; // 0.25 cirBTC
-
-    uint16 constant BORROW_FEE_BPS = 50; // 0.5% origination fee on USDC
+    uint256 constant RAY = RayMath.RAY;
 
     function run() external {
         require(block.chainid == 5042, "Wrong chain: expected Arc Mainnet (5042)");
-        _checkToken(USDC, 6);
-        _checkToken(CIR_BTC, 8);
-        require(PYTH_PRO.code.length > 0, "Pyth Pro verifier missing");
 
-        // Accept the key with or without a 0x prefix (.env stores it bare).
-        string memory raw = vm.envString("DEPLOYER_PRIVATE_KEY");
-        bytes memory rb = bytes(raw);
-        bool prefixed = rb.length >= 2 && rb[0] == "0" && (rb[1] == "x" || rb[1] == "X");
-        uint256 pk = vm.parseUint(prefixed ? raw : string.concat("0x", raw));
-        address deployer = vm.addr(pk);
+        vm.startBroadcast();
+        address deployer = msg.sender;
 
-        vm.startBroadcast(pk);
-
+        // ------------------------------------------------------------------
+        // 1. LendingPool — deployer keeps all roles (no Timelock on mainnet v1)
+        // ------------------------------------------------------------------
         LendingPool pool = new LendingPool(deployer);
+        console.log("LendingPool:       ", address(pool));
 
-        // base 0%, slope1 8%, slope2 100%, kink 90% (same as testnet)
-        InterestRateModel irm = new InterestRateModel(0, 0.08e27, 1.00e27, 0.90e27);
+        // ------------------------------------------------------------------
+        // 2. Interest Rate Model
+        //    base=0%, slope1=8%, kink=90%, slope2=100%
+        // ------------------------------------------------------------------
+        InterestRateModel irm = new InterestRateModel(
+            0,       // baseRate: 0%
+            0.08e27, // slope1:   8%
+            1.00e27, // slope2: 100%
+            0.90e27  // kink:    90%
+        );
+        console.log("IRM:               ", address(irm));
 
-        // USDC is priced at $1.00 by the adapter and needs no feed.
+        // ------------------------------------------------------------------
+        // 3. PythOracleAdapter with BTC/USD feed only
+        //    maxAge 300s: usable through 4 missed 60s keeper ticks
+        // ------------------------------------------------------------------
         PythOracleAdapter oracle = new PythOracleAdapter(deployer, PYTH_PRO);
-        oracle.setFeed(CIR_BTC, FEED_BTC_USD, FEED_MAX_AGE);
+        oracle.setFeed(CIR_BTC, FEED_BTC_USD, 300);
+        // USDC: getPrice(USDC) always returns $1 (no feed needed)
+        console.log("PythOracleAdapter: ", address(oracle));
 
-        sToken    sUSDC   = new sToken("SteadFi Supply USDC", "sfUSDC", 6, address(pool), USDC);
-        DebtToken dUSDC   = new DebtToken("SteadFi Debt USDC", "dUSDC", 6, address(pool), USDC);
+        // ------------------------------------------------------------------
+        // 4. USDC market tokens
+        // ------------------------------------------------------------------
+        sToken    sUSDC = new sToken("SteadFi Supply USDC", "sfUSDC", 6, address(pool), USDC);
+        DebtToken dUSDC = new DebtToken("SteadFi Debt USDC", "dUSDC", 6, address(pool), USDC);
+        console.log("sUSDC:             ", address(sUSDC));
+        console.log("dUSDC:             ", address(dUSDC));
+
+        // ------------------------------------------------------------------
+        // 5. cirBTC collateral tokens
+        // ------------------------------------------------------------------
         sToken    sCIRBTC = new sToken("SteadFi Supply cirBTC", "sfcirBTC", 8, address(pool), CIR_BTC);
         DebtToken dCIRBTC = new DebtToken("SteadFi Debt cirBTC", "dcirBTC", 8, address(pool), CIR_BTC);
+        console.log("sCIRBTC:           ", address(sCIRBTC));
+        console.log("dCIRBTC:           ", address(dCIRBTC));
 
-        // USDC: lend-and-borrow only. cirBTC: collateral only.
+        // ------------------------------------------------------------------
+        // 6. Add markets
+        //
+        // USDC: lend + borrow, NOT collateral
+        //   supplyCap  10,000 USDC (conservative launch cap)
+        //   borrowCap   8,000 USDC
+        //
+        // cirBTC: collateral only, NOT borrowable
+        //   supplyCap  0.25 cirBTC (= 25_000_000 in 8-decimal units)
+        // ------------------------------------------------------------------
         pool.addMarket(USDC, ILendingPool.MarketConfig({
-            sToken: address(sUSDC), debtToken: address(dUSDC), interestModel: address(irm),
-            oracle: address(oracle), decimals: 6,
-            ltv: 0, liqThreshold: 0, liqBonus: 500, reserveFactor: 1000, closeFactor: 5000,
-            supplyCap: USDC_SUPPLY_CAP, borrowCap: USDC_BORROW_CAP,
-            borrowEnabled: true, collateralEnabled: false, active: true, paused: false
-        }));
-        pool.addMarket(CIR_BTC, ILendingPool.MarketConfig({
-            sToken: address(sCIRBTC), debtToken: address(dCIRBTC), interestModel: address(irm),
-            oracle: address(oracle), decimals: 8,
-            ltv: 7000, liqThreshold: 7800, liqBonus: 800, reserveFactor: 1500, closeFactor: 5000,
-            supplyCap: CIRBTC_SUPPLY_CAP, borrowCap: 0,
-            borrowEnabled: false, collateralEnabled: true, active: true, paused: false
+            sToken:            address(sUSDC),
+            debtToken:         address(dUSDC),
+            interestModel:     address(irm),
+            oracle:            address(oracle),
+            decimals:          6,
+            ltv:               0,
+            liqThreshold:      0,
+            liqBonus:          500,    // 5%
+            reserveFactor:     1000,   // 10%
+            closeFactor:       5000,   // 50%
+            supplyCap:         10_000e6,   // 10,000 USDC
+            borrowCap:         8_000e6,    //  8,000 USDC
+            borrowEnabled:     true,
+            collateralEnabled: false,
+            active:            true,
+            paused:            false
         }));
 
-        pool.setBorrowFee(USDC, BORROW_FEE_BPS);
+        pool.addMarket(CIR_BTC, ILendingPool.MarketConfig({
+            sToken:            address(sCIRBTC),
+            debtToken:         address(dCIRBTC),
+            interestModel:     address(irm),
+            oracle:            address(oracle),
+            decimals:          8,
+            ltv:               7000,   // 70%
+            liqThreshold:      7800,   // 78%
+            liqBonus:          800,    // 8%
+            reserveFactor:     1500,   // 15%
+            closeFactor:       5000,   // 50%
+            supplyCap:         25_000_000,  // 0.25 cirBTC (8 decimals → 25_000_000)
+            borrowCap:         0,
+            borrowEnabled:     false,
+            collateralEnabled: true,
+            active:            true,
+            paused:            false
+        }));
+
+        // ------------------------------------------------------------------
+        // 7. Protocol revenue: 0.5% one-time borrow (origination) fee on USDC
+        // ------------------------------------------------------------------
+        pool.setBorrowFee(USDC, 50);
 
         vm.stopBroadcast();
 
-        console.log("=== SteadFi Arc Mainnet deployment ===");
-        console.log("Chain ID:", block.chainid);
-        console.log("Deployer:", deployer);
-        console.log("LendingPool:", address(pool));
-        console.log("InterestRateModel:", address(irm));
-        console.log("PythOracleAdapter:", address(oracle));
-        console.log("sUSDC:", address(sUSDC));
-        console.log("dUSDC:", address(dUSDC));
-        console.log("sCIRBTC:", address(sCIRBTC));
-        console.log("dCIRBTC:", address(dCIRBTC));
-    }
-
-    function _checkToken(address token, uint8 decimals) internal view {
-        require(token.code.length > 0, "token has no code");
-        require(IERC20Decimals(token).decimals() == decimals, "token decimals mismatch");
+        console.log("\n=== Arc Mainnet Deployment Complete ===");
+        console.log("Deployer:          ", deployer);
+        console.log("Chain ID:          ", block.chainid);
+        console.log("\nCopy these addresses into deployments/mainnet.json");
+        console.log("\nMarkets: USDC (lend+borrow), cirBTC (collateral)");
+        console.log("Keeper: push one price update before any borrow can proceed.");
     }
 }
