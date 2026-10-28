@@ -42,7 +42,10 @@ export default defineConfig({
       // can block cross-origin calls to rpc.testnet.arc.io, which leaves every
       // balance/price read empty. See src/config.ts.
       '/arc-rpc': {
-        target: 'https://rpc.testnet.arc.io',
+        // Default: Arc Mainnet. Override by setting VITE_NETWORK=testnet in .env.
+        target: (process.env.VITE_NETWORK === 'testnet')
+          ? 'https://rpc.testnet.arc.io'
+          : 'https://rpc.mainnet.arc.io',
         changeOrigin: true,
         rewrite: () => '/',
       },

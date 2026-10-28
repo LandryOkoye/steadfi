@@ -1,64 +1,112 @@
 /**
  * SteadFi Liquidation Keeper
  * ─────────────────────────────────────────────────────────────────────────────
- * Monitors borrower health and liquidates unhealthy positions on Arc Testnet.
+ * Pushes Pyth Pro price updates and liquidates unhealthy positions.
  *
- * All assets, prices, debt and collateral balances are read from chain. The
- * keeper picks the borrower's largest debt market and largest collateral market
- * using the on-chain Pyth oracle, then repays the full debt (the pool caps it at
- * the market close factor).
+ * Supports Arc Mainnet and Arc Testnet via NETWORK env:
+ *
+ *   NETWORK=mainnet   — Arc Mainnet (chain 5042, default). Only BTC/USD feed.
+ *   NETWORK=testnet   — Arc Testnet (chain 5042002). BTC/USD, ETH/USD, EUR/USD.
  *
  * Usage:
- *   bun run src/keeper.ts
+ *   bun run src/keeper.ts              # continuous, mainnet
+ *   RUN_ONCE=1 NETWORK=mainnet bun run src/keeper.ts   # push one price update
+ *   NETWORK=testnet bun run src/keeper.ts              # continuous, testnet
  *
  * Required env:
- *   KEEPER_PRIVATE_KEY  — funded keeper wallet private key. Use a dedicated
- *                         wallet: sharing it with a user's MetaMask account makes
- *                         their transactions fail with "nonce too low".
+ *   KEEPER_PRIVATE_KEY  — funded keeper wallet (no 0x prefix).
+ *   PYTH_API_KEY        — Pyth Pro (Lazer) API key.
+ *
  * Optional env:
- *   LENDING_POOL_ADDR   — defaults to the Phase 1 testnet deployment
- *   ORACLE_ADDR         — defaults to the Phase 1 PythOracleAdapter
- *   RPC_URL             — defaults to https://rpc.testnet.arc.io
- *   START_BLOCK         — first block to scan for Borrow events (default: head - 100k)
- *   POLL_INTERVAL_MS    — default 60000 (each price update costs ~$0.003 gas;
- *                         60s stays well inside the oracle's 300s maxAge)
+ *   NETWORK             — "mainnet" (default) | "testnet"
+ *   LENDING_POOL_ADDR   — overrides the default for the selected network
+ *   ORACLE_ADDR         — overrides the default for the selected network
+ *   RPC_URL             — overrides the default for the selected network
+ *   POLL_INTERVAL_MS    — default 60000
+ *   RUN_ONCE            — "1" to push one price update and exit
+ *   MIN_HF_TRIGGER      — liquidate below this HF (default 1.0)
+ *   START_BLOCK         — first block to scan for Borrow events
  */
 
 import { createPublicClient, createWalletClient, http, parseAbi, parseAbiItem, maxUint256 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { arcTestnet } from 'viem/chains'
+import { arc, arcTestnet } from 'viem/chains'
+
+// ── Network selection ─────────────────────────────────────────────────────────
+
+const NETWORK = (process.env.NETWORK ?? 'mainnet').toLowerCase()
+if (NETWORK !== 'mainnet' && NETWORK !== 'testnet') {
+  console.error(`[keeper] Invalid NETWORK="${NETWORK}". Use "mainnet" or "testnet".`)
+  process.exit(1)
+}
+const IS_MAINNET = NETWORK === 'mainnet'
+
+/**
+ * Per-network defaults. Mainnet has only the BTC/USD feed (1); testnet also
+ * has ETH/USD (2) and EUR/USD (327). Never push ETH/EUR feeds on mainnet —
+ * the oracle has no registered asset for them there.
+ */
+const NETWORK_CONFIG = IS_MAINNET
+  ? {
+      chain:          arc,
+      defaultRpc:     'https://rpc.mainnet.arc.io',
+      defaultPool:    '0xc85f7C6DCFC9ca544c72EBAb93881A34485B1652' as `0x${string}`,
+      defaultOracle:  '0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B' as `0x${string}`,
+      usdc:           '0x3600000000000000000000000000000000000000' as `0x${string}`,
+      cirbtc:         '0x171A4217b86A807A64eB94757Db6849fb4bDbAA0' as `0x${string}`,
+      weth:           null as `0x${string}` | null,
+      eurc:           null as `0x${string}` | null,
+      feedIds:        [1] as const,
+    }
+  : {
+      chain:          arcTestnet,
+      defaultRpc:     'https://rpc.testnet.arc.io',
+      defaultPool:    '0x57E1066DA815DD1c1DD1adA82859729ce7f82989' as `0x${string}`,
+      defaultOracle:  '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730' as `0x${string}`,
+      usdc:           '0x3600000000000000000000000000000000000000' as `0x${string}`,
+      cirbtc:         '0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF' as `0x${string}`,
+      weth:           '0x2c4047028a72803939b6fb674D01bC059B5C4961' as `0x${string}`,
+      eurc:           '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a' as `0x${string}`,
+      feedIds:        [1, 2, 327] as const,
+    }
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RPC_URL = process.env.RPC_URL ?? 'https://rpc.testnet.arc.io'
+
+const RPC_URL      = process.env.RPC_URL         ?? NETWORK_CONFIG.defaultRpc
+const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? NETWORK_CONFIG.defaultPool) as `0x${string}`
+const ORACLE       = (process.env.ORACLE_ADDR       ?? NETWORK_CONFIG.defaultOracle) as `0x${string}`
+
 const RAW_KEEPER_KEY = process.env.KEEPER_PRIVATE_KEY
 const KEEPER_KEY = (RAW_KEEPER_KEY
   ? (RAW_KEEPER_KEY.startsWith('0x') ? RAW_KEEPER_KEY : `0x${RAW_KEEPER_KEY}`)
   : undefined) as `0x${string}` | undefined
-const LENDING_POOL = (process.env.LENDING_POOL_ADDR ?? '0x57E1066DA815DD1c1DD1adA82859729ce7f82989') as `0x${string}`
-const ORACLE = (process.env.ORACLE_ADDR ?? '0x42c69A87e59Cf8Dd845df2197d569745E7bb5730') as `0x${string}`
-const PYTH_LAZER = '0xACeA761c27A909d4D3895128EBe6370FDE2dF481' as `0x${string}`
-const PYTH_API_KEY = process.env.PYTH_API_KEY
-const PYTH_PRO_URL = process.env.PYTH_PRO_URL ?? 'https://pyth-lazer.dourolabs.app'
+
+const PYTH_LAZER    = '0xACeA761c27A909d4D3895128EBe6370FDE2dF481' as `0x${string}`
+const PYTH_API_KEY  = process.env.PYTH_API_KEY
+const PYTH_PRO_URL  = process.env.PYTH_PRO_URL ?? 'https://pyth-lazer.dourolabs.app'
+const FEED_IDS      = NETWORK_CONFIG.feedIds as readonly number[]
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 60_000)
-const RUN_ONCE = process.env.RUN_ONCE === '1'
-const MIN_HF_TRIGGER = Number(process.env.MIN_HF_TRIGGER ?? 1.0)
+const RUN_ONCE         = process.env.RUN_ONCE === '1'
+const MIN_HF_TRIGGER   = Number(process.env.MIN_HF_TRIGGER ?? 1.0)
 
-const USDC = '0x3600000000000000000000000000000000000000' as `0x${string}`
-const EURC = '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a' as `0x${string}`
-const CIRBTC = '0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF' as `0x${string}`
-const WETH = '0x2c4047028a72803939b6fb674D01bC059B5C4961' as `0x${string}`
+// Borrow assets: markets with borrowEnabled=true
+const BORROW_ASSETS = [NETWORK_CONFIG.usdc, ...(NETWORK_CONFIG.eurc ? [NETWORK_CONFIG.eurc] : [])]
+  .filter(Boolean) as `0x${string}`[]
 
-const BORROW_ASSETS = [USDC, EURC] as const
-const COLLATERAL_ASSETS = [CIRBTC, WETH] as const
+// Collateral assets: markets with collateralEnabled=true
+const COLLATERAL_ASSETS = [NETWORK_CONFIG.cirbtc, ...(NETWORK_CONFIG.weth ? [NETWORK_CONFIG.weth] : [])]
+  .filter(Boolean) as `0x${string}`[]
+
 const DECIMALS: Record<string, number> = {
-  [USDC.toLowerCase()]: 6,
-  [EURC.toLowerCase()]: 6,
-  [CIRBTC.toLowerCase()]: 8,
-  [WETH.toLowerCase()]: 18,
+  [NETWORK_CONFIG.usdc.toLowerCase()]: 6,
+  [NETWORK_CONFIG.cirbtc.toLowerCase()]: 8,
+  ...(NETWORK_CONFIG.weth ? { [NETWORK_CONFIG.weth.toLowerCase()]: 18 } : {}),
+  ...(NETWORK_CONFIG.eurc ? { [NETWORK_CONFIG.eurc.toLowerCase()]: 6 } : {}),
 }
 
 // ── ABIs ──────────────────────────────────────────────────────────────────────
+
 const POOL_ABI = parseAbi([
   'function getHealthFactor(address user) view returns (uint256 hf, bool isHealthy)',
   'function getUserDebt(address user, address asset) view returns (uint256)',
@@ -79,9 +127,6 @@ const LAZER_ABI = parseAbi([
   'function verification_fee() view returns (uint256)',
 ])
 
-// Pyth Pro numeric feed IDs: BTC/USD, ETH/USD, EUR/USD.
-const FEED_IDS = [1, 2, 327] as const
-
 const ERC20_ABI = parseAbi([
   'function balanceOf(address) view returns (uint256)',
   'function allowance(address owner, address spender) view returns (uint256)',
@@ -89,12 +134,13 @@ const ERC20_ABI = parseAbi([
 ])
 
 // ── Clients ───────────────────────────────────────────────────────────────────
+
 function buildClients() {
   if (!KEEPER_KEY) throw new Error('KEEPER_PRIVATE_KEY not set')
-  const account = privateKeyToAccount(KEEPER_KEY)
+  const account   = privateKeyToAccount(KEEPER_KEY)
   const transport = http(RPC_URL)
-  const publicClient = createPublicClient({ chain: arcTestnet, transport })
-  const walletClient = createWalletClient({ account, chain: arcTestnet, transport })
+  const publicClient = createPublicClient({ chain: NETWORK_CONFIG.chain, transport })
+  const walletClient = createWalletClient({ account, chain: NETWORK_CONFIG.chain, transport })
   return { account, publicClient, walletClient }
 }
 
@@ -102,6 +148,7 @@ type PublicClient = ReturnType<typeof buildClients>['publicClient']
 type WalletClient = ReturnType<typeof buildClients>['walletClient']
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
+
 async function getHF(publicClient: PublicClient, borrower: `0x${string}`): Promise<number> {
   try {
     const [hfRay] = (await publicClient.readContract({
@@ -157,6 +204,8 @@ async function collectBorrowers(publicClient: PublicClient, fromBlock: bigint): 
   return borrowers
 }
 
+// ── Pyth Pro price refresh ────────────────────────────────────────────────────
+
 let priceWarned = false
 
 async function refreshPythPrices(
@@ -165,7 +214,7 @@ async function refreshPythPrices(
 ): Promise<void> {
   if (!PYTH_API_KEY) {
     if (!priceWarned) {
-      console.warn('[keeper] PYTH_API_KEY not set — skipping Pyth Pro price refresh (feeds may be stale)')
+      console.warn('[keeper] PYTH_API_KEY not set — skipping price refresh (feeds may be stale)')
       priceWarned = true
     }
     return
@@ -220,6 +269,8 @@ async function refreshPythPrices(
   }
 }
 
+// ── Best liquidation pair for a borrower ─────────────────────────────────────
+
 async function bestPosition(publicClient: PublicClient, borrower: `0x${string}`) {
   const [debtAmounts, supplyAmounts, borrowPrices, collateralPrices] = await Promise.all([
     Promise.all(BORROW_ASSETS.map(a => publicClient.readContract({
@@ -259,6 +310,7 @@ async function bestPosition(publicClient: PublicClient, borrower: `0x${string}`)
 }
 
 // ── Liquidation ───────────────────────────────────────────────────────────────
+
 async function liquidate(
   publicClient: PublicClient,
   walletClient: WalletClient,
@@ -288,9 +340,7 @@ async function liquidate(
     await publicClient.waitForTransactionReceipt({ hash: approveHash, confirmations: 1 })
   }
 
-  console.log(
-    `[keeper] Liquidating ${borrower}: repay ${repayAmount} of ${debtAsset}, seize ${collateralAsset}`
-  )
+  console.log(`[keeper] Liquidating ${borrower}: repay ${repayAmount} of ${debtAsset}, seize ${collateralAsset}`)
 
   try {
     const { request } = await publicClient.simulateContract({
@@ -312,12 +362,14 @@ async function liquidate(
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
+
 async function main() {
-  console.log('[keeper] SteadFi liquidation keeper starting...')
-  console.log(`[keeper] Pool:   ${LENDING_POOL}`)
-  console.log(`[keeper] Oracle: ${ORACLE}`)
-  console.log(`[keeper] RPC:    ${RPC_URL}`)
-  console.log(`[keeper] Trigger HF < ${MIN_HF_TRIGGER}`)
+  console.log(`[keeper] SteadFi keeper starting (NETWORK=${NETWORK})`)
+  console.log(`[keeper] Pool:     ${LENDING_POOL}`)
+  console.log(`[keeper] Oracle:   ${ORACLE}`)
+  console.log(`[keeper] RPC:      ${RPC_URL}`)
+  console.log(`[keeper] Feeds:    [${FEED_IDS.join(', ')}]`)
+  console.log(`[keeper] Trigger:  HF < ${MIN_HF_TRIGGER}`)
 
   const { publicClient, walletClient } = buildClients()
 

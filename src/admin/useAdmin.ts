@@ -9,7 +9,7 @@ import {
 } from 'wagmi'
 import { decodeFunctionData, encodeFunctionData, type AbiEvent } from 'viem'
 import {
-  ARC_TESTNET_CHAIN_ID, CONTRACTS, ERC20_ABI, LENDING_POOL_ABI, POOL_DEPLOY_BLOCK, TOKENS, TokenSymbol,
+  ARC_CHAIN_ID, CONTRACTS, ERC20_ABI, LENDING_POOL_ABI, POOL_DEPLOY_BLOCK, TOKENS, TokenSymbol,
 } from '../lib/steadfi'
 import { SYMBOLS, useConfirmTx, useOraclePrices } from '../hooks/useSteadFi'
 import { getLogsChunked } from '../lib/logs'
@@ -54,14 +54,15 @@ export function useAdminRoles(account?: `0x${string}`): AdminRoles {
         abi: POOL_ADMIN_ABI,
         functionName: 'hasRole' as const,
         args: [ROLES[r], who!] as const,
-        chainId: ARC_TESTNET_CHAIN_ID,
+        chainId: ARC_CHAIN_ID,
       })),
-      {
+      // On mainnet there is no Timelock, so skip the admin() call.
+      ...(CONTRACTS.Timelock ? [{
         address: CONTRACTS.Timelock,
         abi: TIMELOCK_ABI,
         functionName: 'admin' as const,
-        chainId: ARC_TESTNET_CHAIN_ID,
-      },
+        chainId: ARC_CHAIN_ID,
+      }] : []),
     ],
     // allowFailure: false makes any failed read fail the whole query, and
     // react-query keeps the last good data when a background refetch fails,
@@ -69,11 +70,11 @@ export function useAdminRoles(account?: `0x${string}`): AdminRoles {
     allowFailure: false,
     query: { enabled: !!who, refetchInterval: 60_000 },
   })
-  const data = res.data as readonly [boolean, boolean, boolean, `0x${string}`] | undefined
+  const data = res.data as readonly [boolean, boolean, boolean, `0x${string}`] | readonly [boolean, boolean, boolean] | undefined
   const isOwner = data?.[0] === true
   const isRiskAdmin = data?.[1] === true
   const isPauseGuardian = data?.[2] === true
-  const timelockAdmin = data?.[3] ?? null
+  const timelockAdmin = (CONTRACTS.Timelock && data?.[3]) ? (data[3]) : null
   const isTimelockAdmin = !!who && !!timelockAdmin && timelockAdmin.toLowerCase() === who.toLowerCase()
   return {
     isOwner, isRiskAdmin, isPauseGuardian, isTimelockAdmin,
@@ -132,13 +133,13 @@ export function useAdminMarkets(): { markets: AdminMarket[]; loading: boolean } 
     contracts: SYMBOLS.flatMap(sym => {
       const asset = TOKENS[sym].address
       return [
-        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketConfig' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketState' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketTotals' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketRates' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'borrowFeeBps' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: asset, abi: ERC20_ABI, functionName: 'balanceOf' as const, args: [CONTRACTS.LendingPool] as const, chainId: ARC_TESTNET_CHAIN_ID },
-        { address: CONTRACTS.PythOracle, abi: ORACLE_ADMIN_ABI, functionName: 'storedPrices' as const, args: [asset] as const, chainId: ARC_TESTNET_CHAIN_ID },
+        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketConfig' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
+        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketState' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
+        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketTotals' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
+        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getMarketRates' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
+        { address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'borrowFeeBps' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
+        { address: asset, abi: ERC20_ABI, functionName: 'balanceOf' as const, args: [CONTRACTS.LendingPool] as const, chainId: ARC_CHAIN_ID },
+        { address: CONTRACTS.PythOracle, abi: ORACLE_ADMIN_ABI, functionName: 'storedPrices' as const, args: [asset] as const, chainId: ARC_CHAIN_ID },
       ]
     }),
     query: { refetchInterval: 15_000 },
@@ -146,7 +147,7 @@ export function useAdminMarkets(): { markets: AdminMarket[]; loading: boolean } 
   const maxAges = useReadContracts({
     contracts: SYMBOLS.map(sym => ({
       address: CONTRACTS.PythOracle, abi: ORACLE_ADMIN_ABI, functionName: 'assetConfigs' as const,
-      args: [TOKENS[sym].address] as const, chainId: ARC_TESTNET_CHAIN_ID,
+      args: [TOKENS[sym].address] as const, chainId: ARC_CHAIN_ID,
     })),
   })
   const nowS = Math.floor(useNow() / 1000)
@@ -164,7 +165,7 @@ export function useAdminMarkets(): { markets: AdminMarket[]; loading: boolean } 
     const cash = get<bigint>(5) ?? 0n
     const stored = get<readonly [bigint, bigint, boolean]>(6)
     const ageCfg = maxAges.data?.[i]?.status === 'success'
-      ? maxAges.data[i].result as readonly [number, bigint]
+      ? maxAges.data[i].result
       : undefined
 
     const totalSupply = totals?.[0] ?? 0n
@@ -210,26 +211,29 @@ function useNow(): number {
 export function useKeeperBalance() {
   return useBalance({
     address: KEEPER_ADDRESS,
-    chainId: ARC_TESTNET_CHAIN_ID,
+    chainId: ARC_CHAIN_ID,
     query: { refetchInterval: 30_000 },
   })
 }
 
 export function useTimelockInfo() {
+  // On mainnet there is no Timelock; return nulls immediately without RPC calls.
+  const hasTimelock = !!CONTRACTS.Timelock
   const res = useReadContracts({
-    contracts: [
-      { address: CONTRACTS.Timelock, abi: TIMELOCK_ABI, functionName: 'admin' as const, chainId: ARC_TESTNET_CHAIN_ID },
-      { address: CONTRACTS.Timelock, abi: TIMELOCK_ABI, functionName: 'delay' as const, chainId: ARC_TESTNET_CHAIN_ID },
+    contracts: hasTimelock ? [
+      { address: CONTRACTS.Timelock as `0x${string}`, abi: TIMELOCK_ABI, functionName: 'admin' as const, chainId: ARC_CHAIN_ID },
+      { address: CONTRACTS.Timelock as `0x${string}`, abi: TIMELOCK_ABI, functionName: 'delay' as const, chainId: ARC_CHAIN_ID },
       {
         address: CONTRACTS.LendingPool, abi: POOL_ADMIN_ABI, functionName: 'hasRole' as const,
-        args: [ROLES.RISK_ADMIN, CONTRACTS.Timelock] as const, chainId: ARC_TESTNET_CHAIN_ID,
+        args: [ROLES.RISK_ADMIN, CONTRACTS.Timelock as `0x${string}`] as const, chainId: ARC_CHAIN_ID,
       },
-    ],
+    ] : [],
+    query: { enabled: hasTimelock },
   })
   return {
-    admin: res.data?.[0]?.status === 'success' ? res.data[0].result as `0x${string}` : null,
-    delayS: res.data?.[1]?.status === 'success' ? res.data[1].result as bigint : null,
-    hasRiskAdmin: res.data?.[2]?.status === 'success' ? res.data[2].result as boolean : null,
+    admin: hasTimelock && res.data?.[0]?.status === 'success' ? res.data[0].result : null,
+    delayS: hasTimelock && res.data?.[1]?.status === 'success' ? res.data[1].result : null,
+    hasRiskAdmin: hasTimelock && res.data?.[2]?.status === 'success' ? res.data[2].result : null,
   }
 }
 
@@ -247,7 +251,7 @@ export function usePoolAdminWrite() {
       abi: POOL_ADMIN_ABI,
       functionName,
       args: args as never,
-      chainId: ARC_TESTNET_CHAIN_ID,
+      chainId: ARC_CHAIN_ID,
     })
     return confirm(hash)
   }
@@ -275,12 +279,13 @@ export function useRiskChange() {
       const data = encodeFunctionData({ abi: POOL_ADMIN_ABI, functionName, args: args as never })
       // 2-minute buffer so the tx still satisfies eta >= now + delay when mined.
       const eta = BigInt(Math.floor(Date.now() / 1000)) + delayS + 120n
+      if (!CONTRACTS.Timelock) throw new Error('No Timelock on this network')
       const hash = await writeContractAsync({
         address: CONTRACTS.Timelock,
         abi: TIMELOCK_ABI,
         functionName: 'queueTransaction',
         args: [CONTRACTS.LendingPool, 0n, '', data, eta],
-        chainId: ARC_TESTNET_CHAIN_ID,
+        chainId: ARC_CHAIN_ID,
       })
       return { hash: await confirm(hash), queued: true }
     }
@@ -321,19 +326,19 @@ function describeCall(data: `0x${string}`): string {
 
 /** Timelock transactions that are queued and not yet executed or cancelled. */
 export function useTimelockQueue(reloadKey: number) {
-  const client = usePublicClient({ chainId: ARC_TESTNET_CHAIN_ID })
+  const client = usePublicClient({ chainId: ARC_CHAIN_ID })
   const [items, setItems] = useState<QueuedTx[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!client) return
+    if (!client || !CONTRACTS.Timelock) return
     let cancelled = false
     async function load() {
       setLoading(true); setError(null)
       try {
         const logs = await getLogsChunked(
-          client!, CONTRACTS.Timelock, QUEUE_EVENTS, POOL_DEPLOY_BLOCK,
+          client!, CONTRACTS.Timelock as `0x${string}`, QUEUE_EVENTS, POOL_DEPLOY_BLOCK,
           { cacheKey: 'timelock-queue', isCancelled: () => cancelled },
         )
         type L = { eventName?: string; args?: Omit<QueuedTx, 'summary'> }
@@ -348,7 +353,7 @@ export function useTimelockQueue(reloadKey: number) {
         const pending = [...latest.values()].filter((x): x is QueuedTx => x !== null)
         // Confirm against contract storage; events alone can't see every edge case.
         const still = await Promise.all(pending.map(p => client!.readContract({
-          address: CONTRACTS.Timelock, abi: TIMELOCK_ABI, functionName: 'queuedTransactions', args: [p.txHash],
+          address: CONTRACTS.Timelock as `0x${string}`, abi: TIMELOCK_ABI, functionName: 'queuedTransactions', args: [p.txHash],
         })))
         if (!cancelled) setItems(pending.filter((_, i) => still[i]))
       } catch (err) {
@@ -369,12 +374,13 @@ export function useTimelockAction() {
   const { writeContractAsync } = useWriteContract()
   const confirm = useConfirmTx()
   return async (functionName: 'executeTransaction' | 'cancelTransaction', tx: QueuedTx) => {
+    if (!CONTRACTS.Timelock) throw new Error('No Timelock on this network')
     const hash = await writeContractAsync({
       address: CONTRACTS.Timelock,
       abi: TIMELOCK_ABI,
       functionName,
       args: [tx.target, tx.value, tx.signature, tx.data, tx.eta],
-      chainId: ARC_TESTNET_CHAIN_ID,
+      chainId: ARC_CHAIN_ID,
     })
     return confirm(hash)
   }
@@ -385,7 +391,7 @@ export function useTimelockAction() {
 const ROLE_EVENTS = POOL_ADMIN_ABI.filter(e => e.type === 'event') as unknown as AbiEvent[]
 
 export function useRoleHolders(reloadKey: number) {
-  const client = usePublicClient({ chainId: ARC_TESTNET_CHAIN_ID })
+  const client = usePublicClient({ chainId: ARC_CHAIN_ID })
   const [holders, setHolders] = useState<Record<RoleName, `0x${string}`[]> | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -432,7 +438,7 @@ export function useHasRole(role: RoleName, account: `0x${string}` | undefined) {
     abi: POOL_ADMIN_ABI,
     functionName: 'hasRole',
     args: [ROLES[role], account!],
-    chainId: ARC_TESTNET_CHAIN_ID,
+    chainId: ARC_CHAIN_ID,
     query: { enabled: !!account },
   })
 }

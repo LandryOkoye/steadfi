@@ -7,7 +7,7 @@ import { useBytecode } from 'wagmi'
 import { ArrowSquareOut, Warning, CheckCircle } from '@phosphor-icons/react'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import TokenIcon from '../../components/ui/TokenIcon'
-import { ARC_TESTNET_CHAIN_ID, CONTRACTS, addrUrl } from '../../lib/steadfi'
+import { ARC_CHAIN_ID, CONTRACTS, addrUrl } from '../../lib/steadfi'
 import { useAdminMarkets, useKeeperBalance, useTimelockInfo, type AdminMarket } from '../useAdmin'
 import { KEEPER_ADDRESS, KEEPER_LOW_BALANCE_USDC } from '../abi'
 import { KpiTile, Pill, fmtAmount, fmtUsd, shortAddr, usdOf } from '../components'
@@ -31,7 +31,7 @@ export default function Overview() {
   const { markets, loading } = useAdminMarkets()
   const keeper = useKeeperBalance()
   const timelock = useTimelockInfo()
-  const adminCode = useBytecode({ address: timelock.admin ?? undefined, chainId: ARC_TESTNET_CHAIN_ID, query: { enabled: !!timelock.admin } })
+  const adminCode = useBytecode({ address: timelock.admin ?? undefined, chainId: ARC_CHAIN_ID, query: { enabled: !!timelock.admin } })
 
   const supplied = sumUsd(markets, m => m.totalSupply)
   const borrowed = sumUsd(markets, m => m.totalDebt)
@@ -55,7 +55,7 @@ export default function Overview() {
   if (markets.some(m => m.borrowFeeBps === null)) {
     alerts.push({ tone: 'warning', text: 'The deployed pool predates the borrow fee, so no fee revenue is collected until the pool is redeployed.' })
   }
-  if (adminCode.isSuccess && !adminCode.data) {
+  if (CONTRACTS.Timelock && adminCode.isSuccess && !adminCode.data) {
     alerts.push({ tone: 'warning', text: 'The Timelock admin is a single wallet (EOA). Move it to a multisig before handling real funds.' })
   }
 
@@ -162,7 +162,7 @@ export default function Overview() {
         <Card>
           <CardHeader><CardTitle>Contracts</CardTitle></CardHeader>
           <ul className="space-y-1.5 text-sm">
-            {(['LendingPool', 'Timelock', 'PythOracle'] as const).map(k => (
+            {(['LendingPool', 'PythOracle'] as const).map(k => (
               <li key={k} className="flex justify-between">
                 <span className="text-[var(--color-muted-foreground)]">{k}</span>
                 <a className="mono flex items-center gap-1 hover:underline" href={addrUrl(CONTRACTS[k])} target="_blank" rel="noreferrer">
@@ -170,14 +170,24 @@ export default function Overview() {
                 </a>
               </li>
             ))}
-            <li className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Timelock delay</span>
-              <span className="mono">{timelock.delayS === null ? '…' : `${Number(timelock.delayS) / 3600} h`}</span>
-            </li>
-            <li className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Timelock admin</span>
-              <span className="mono">{timelock.admin ? shortAddr(timelock.admin) : '…'}</span>
-            </li>
+            {CONTRACTS.Timelock && (
+              <>
+                <li className="flex justify-between">
+                  <span className="text-[var(--color-muted-foreground)]">Timelock</span>
+                  <a className="mono flex items-center gap-1 hover:underline" href={addrUrl(CONTRACTS.Timelock)} target="_blank" rel="noreferrer">
+                    {shortAddr(CONTRACTS.Timelock)} <ArrowSquareOut size={12} aria-hidden="true" />
+                  </a>
+                </li>
+                <li className="flex justify-between">
+                  <span className="text-[var(--color-muted-foreground)]">Timelock delay</span>
+                  <span className="mono">{timelock.delayS === null ? '…' : `${Number(timelock.delayS) / 3600} h`}</span>
+                </li>
+                <li className="flex justify-between">
+                  <span className="text-[var(--color-muted-foreground)]">Timelock admin</span>
+                  <span className="mono">{timelock.admin ? shortAddr(timelock.admin) : '…'}</span>
+                </li>
+              </>
+            )}
           </ul>
         </Card>
       </div>

@@ -22,7 +22,7 @@ export default function Access() {
   const valid = isAddress(account)
 
   const label = (a: string) =>
-    a.toLowerCase() === CONTRACTS.Timelock.toLowerCase() ? 'Timelock' : shortAddr(a)
+    CONTRACTS.Timelock && a.toLowerCase() === CONTRACTS.Timelock.toLowerCase() ? 'Timelock' : shortAddr(a)
 
   async function change(fn: 'grantRole' | 'revokeRole') {
     const ok = await run(fn, `${fn === 'grantRole' ? 'Granted' : 'Revoked'} ${ROLE_LABELS[role]}`,

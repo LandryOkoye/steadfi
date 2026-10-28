@@ -1,7 +1,8 @@
 /**
- * NetworkBadge — Arc Testnet indicator with a live dot.
+ * NetworkBadge — shows the active network (Arc Mainnet or Arc Testnet) with a live dot.
  */
 import { NetworkArc } from '@web3icons/react'
+import { NETWORK_NAME } from '../../lib/steadfi'
 
 export default function NetworkBadge() {
   return (
@@ -9,7 +10,7 @@ export default function NetworkBadge() {
       <span className="grid place-items-center h-6 w-6 rounded-full bg-[var(--color-muted)]">
         <NetworkArc variant="branded" size={16} aria-hidden="true" />
       </span>
-      Arc Testnet
+      {NETWORK_NAME}
       <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-success)] opacity-60" />
         <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[var(--color-success)]" />

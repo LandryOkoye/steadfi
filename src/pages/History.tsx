@@ -7,7 +7,7 @@ import { Card, CardHeader, CardTitle } from '../components/ui/Card'
 import { Note, ArrowCircleDown, ArrowCircleUp, ArrowsClockwise, ArrowCircleUpRight, ArrowSquareOut } from '@phosphor-icons/react'
 import { useAccount, usePublicClient } from 'wagmi'
 import type { AbiEvent } from 'viem'
-import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI, POOL_DEPLOY_BLOCK, ARC_TESTNET_CHAIN_ID } from '../lib/steadfi'
+import { CONTRACTS, TOKENS, TokenSymbol, txUrl, LENDING_POOL_EVENTS_ABI, POOL_DEPLOY_BLOCK, ARC_CHAIN_ID } from '../lib/steadfi'
 import { formatUnits, hexToBytes, pad } from 'viem'
 import { getLogsChunked } from '../lib/logs'
 
@@ -49,7 +49,7 @@ const FILTER_OPTIONS: { label: string; value: TxType | 'all' }[] = [
 
 export default function History() {
   const { address, isConnected } = useAccount()
-  const publicClient = usePublicClient({ chainId: ARC_TESTNET_CHAIN_ID })
+  const publicClient = usePublicClient({ chainId: ARC_CHAIN_ID })
   const [filter, setFilter] = useState<TxType | 'all'>('all')
   const [txs, setTxs] = useState<TxRecord[]>([])
   const [loading, setLoading] = useState(false)

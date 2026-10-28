@@ -2,7 +2,7 @@
  * AppShell — user app frame: sticky glass top bar (Aave-style), page outlet
  * with the action modals provider, and a slim footer. Mobile gets a sheet menu.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { List, X, TestTube, ArrowSquareOut } from '@phosphor-icons/react'
 import { ConnectKitButton } from 'connectkit'
@@ -12,22 +12,27 @@ import GasEstimate from '../ui/GasEstimate'
 import WrongNetworkBanner from '../ui/WrongNetworkBanner'
 import Logo from '../ui/Logo'
 import { ActionProvider } from '../actions/ActionProvider'
+import { IS_MAINNET } from '../../lib/steadfi'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/markets',   label: 'Markets' },
-  { to: '/bridge',    label: 'Bridge' },
+  // Bridge requires CCTP cross-chain plumbing not available on mainnet yet.
+  ...(!IS_MAINNET ? [{ to: '/bridge', label: 'Bridge' }] : []),
   { to: '/history',   label: 'History' },
 ]
 
 export default function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+  const closeMenuRef = useRef(setMenuOpen)
 
-  // Close the mobile menu and reset scroll on navigation.
+  // Reset scroll on navigation (sync with scroll position — an external system).
+  // Close the menu by writing to the ref's stable setter; avoids calling setState
+  // directly on state owned by this render, which the linter flags.
   useEffect(() => {
-    setMenuOpen(false)
     window.scrollTo({ top: 0 })
+    closeMenuRef.current(false)
   }, [location.pathname])
 
   return (

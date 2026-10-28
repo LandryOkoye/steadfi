@@ -132,7 +132,7 @@ export default function Bridge() {
 
         <div className="mt-4 rounded-[14px] border border-[var(--color-border)] p-3 text-xs space-y-1">
           <p><span className="text-[var(--color-muted-foreground)]">From:</span> {source.label}</p>
-          <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc Testnet (domain {CCTP.domain})</p>
+          <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc Testnet (domain {CCTP!.domain})</p>
           <p className="break-all"><span className="text-[var(--color-muted-foreground)]">Mint recipient:</span> {isConnected ? 'your connected wallet' : 'connect wallet'}</p>
         </div>
 
@@ -199,13 +199,13 @@ export default function Bridge() {
         <CardHeader><CardTitle>CCTP contracts (Arc Testnet)</CardTitle></CardHeader>
         <div className="rounded-[14px] border border-[var(--color-border)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
           <p className="text-[var(--color-muted-foreground)]">// MessageTransmitterV2</p>
-          <p className="break-all">{CCTP.MessageTransmitterV2}</p>
+          <p className="break-all">{CCTP!.MessageTransmitterV2}</p>
           <p className="text-[var(--color-muted-foreground)] mt-2">// TokenMessengerV2</p>
-          <p className="break-all">{CCTP.TokenMessengerV2}</p>
+          <p className="break-all">{CCTP!.TokenMessengerV2}</p>
         </div>
         <div className="flex flex-wrap gap-3 mt-3">
           <a
-            href={`${EXPLORER_BASE}/address/${CCTP.MessageTransmitterV2}`}
+            href={`${EXPLORER_BASE}/address/${CCTP!.MessageTransmitterV2}`}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline"

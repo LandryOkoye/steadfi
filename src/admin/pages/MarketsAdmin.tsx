@@ -5,7 +5,7 @@
  */
 import { useState } from 'react'
 import { parseUnits } from 'viem'
-import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
+import { Card, CardHeader } from '../../components/ui/Card'
 import Button from '../../components/ui/Button'
 import { TOKENS } from '../../lib/steadfi'
 import {

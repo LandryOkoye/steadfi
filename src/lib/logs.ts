@@ -47,7 +47,7 @@ interface Options {
 // ── bigint-safe (de)serialisation for the cache ──────────────────────────────
 const replacer = (_k: string, v: unknown) => (typeof v === 'bigint' ? { __big: v.toString() } : v)
 const reviver = (_k: string, v: unknown) =>
-  v && typeof v === 'object' && '__big' in (v as object) ? BigInt((v as { __big: string }).__big) : v
+  v && typeof v === 'object' && '__big' in (v) ? BigInt((v as { __big: string }).__big) : v
 
 interface CacheEntry { v: number; scannedTo: string; logs: DecodedLog[] }
 
@@ -83,7 +83,7 @@ export async function getLogsChunked(
   fromBlock: bigint,
   { topics = [], cacheKey, isCancelled = () => false, onProgress }: Options = {},
 ): Promise<DecodedLog[]> {
-  const topic0 = events.map(e => encodeEventTopics({ abi: [e], eventName: e.name } as never)[0] as Hex)
+  const topic0 = events.map(e => encodeEventTopics({ abi: [e], eventName: e.name })[0])
   const key = cacheKey ? `steadfi:logs:${cacheKey}:${address.toLowerCase()}:${fromBlock}` : null
   const cached = key ? readCache(key) : null
 
@@ -108,12 +108,12 @@ export async function getLogsChunked(
             toBlock: `0x${to.toString(16)}`,
           }],
         })
-        const parsed = parseEventLogs({ abi: events, logs: (raw as never[]).map(l => formatLog(l)) as never })
+        const parsed = parseEventLogs({ abi: events, logs: (raw as never[]).map(l => formatLog(l)) })
         return parsed.map(l => ({
-          eventName: l.eventName as string,
+          eventName: l.eventName,
           args: l.args as Record<string, unknown>,
-          transactionHash: l.transactionHash as Hex,
-          blockNumber: l.blockNumber as bigint,
+          transactionHash: l.transactionHash,
+          blockNumber: l.blockNumber,
           logIndex: Number(l.logIndex),
         }))
       } catch (err) {
