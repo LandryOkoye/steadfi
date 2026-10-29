@@ -5,8 +5,8 @@
  *
  * Supports Arc Mainnet and Arc Testnet via NETWORK env:
  *
- *   NETWORK=mainnet   — Arc Mainnet (chain 5042, default). Only BTC/USD feed.
- *   NETWORK=testnet   — Arc Testnet (chain 5042002). BTC/USD, ETH/USD, EUR/USD.
+ *   NETWORK=mainnet   — Arc Mainnet (chain 5042, default). BTC/USD, ETH/USD, EUR/USD feeds.
+ *   NETWORK=testnet   — Arc Testnet (chain 5042002). BTC/USD, ETH/USD, EUR/USD feeds.
  *
  * Usage:
  *   bun run src/keeper.ts              # continuous, mainnet
@@ -42,9 +42,9 @@ if (NETWORK !== 'mainnet' && NETWORK !== 'testnet') {
 const IS_MAINNET = NETWORK === 'mainnet'
 
 /**
- * Per-network defaults. Mainnet has only the BTC/USD feed (1); testnet also
- * has ETH/USD (2) and EUR/USD (327). Never push ETH/EUR feeds on mainnet —
- * the oracle has no registered asset for them there.
+ * Per-network config. Both mainnet and testnet run all four markets:
+ * USDC + EURC (lend/borrow) and cirBTC + WETH (collateral).
+ * Feeds: BTC/USD=1, ETH/USD=2, EUR/USD=327 on both networks.
  */
 const NETWORK_CONFIG = IS_MAINNET
   ? {
@@ -54,9 +54,9 @@ const NETWORK_CONFIG = IS_MAINNET
       defaultOracle:  '0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B' as `0x${string}`,
       usdc:           '0x3600000000000000000000000000000000000000' as `0x${string}`,
       cirbtc:         '0x171A4217b86A807A64eB94757Db6849fb4bDbAA0' as `0x${string}`,
-      weth:           null as `0x${string}` | null,
-      eurc:           null as `0x${string}` | null,
-      feedIds:        [1] as const,
+      weth:           '0x128cC466B61f542da60c70e3aA11c10e19B84EDB' as `0x${string}`,
+      eurc:           '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1' as `0x${string}`,
+      feedIds:        [1, 2, 327] as const,
     }
   : {
       chain:          arcTestnet,
