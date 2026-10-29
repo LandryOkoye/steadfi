@@ -6,7 +6,6 @@
       "contractName": "sToken",
       "contractAddress": "0x0cc0032b8299b517a1111e59e11a476f71b9a9ab",
       "function": null,
-      "functionAbi": null,
       "arguments": [
         "SteadFi Supply EURC",
         "sfEURC",
@@ -32,7 +31,6 @@
       "contractName": "DebtToken",
       "contractAddress": "0xa5dc8cdb0d575d894ddc40f7ef914b852a091e08",
       "function": null,
-      "functionAbi": null,
       "arguments": [
         "SteadFi Debt EURC",
         "dEURC",
@@ -58,7 +56,6 @@
       "contractName": "sToken",
       "contractAddress": "0xc0d1b3e34939c5942745cff3d9d51850ac4c5d5c",
       "function": null,
-      "functionAbi": null,
       "arguments": [
         "SteadFi Supply WETH",
         "sfWETH",
@@ -84,7 +81,6 @@
       "contractName": "DebtToken",
       "contractAddress": "0x4264570af421bbd69bad69594e11e07a378fa105",
       "function": null,
-      "functionAbi": null,
       "arguments": [
         "SteadFi Debt WETH",
         "dWETH",
@@ -110,7 +106,6 @@
       "contractName": null,
       "contractAddress": "0x4b526e6f7e1d82959e0f95f14b2e7f7893c67a6b",
       "function": "setFeed(address,uint32,uint256)",
-      "functionAbi": "function setFeed(address asset, uint32 feedId, uint256 maxAge)",
       "arguments": [
         "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
         "327",
@@ -134,7 +129,6 @@
       "contractName": null,
       "contractAddress": "0x4b526e6f7e1d82959e0f95f14b2e7f7893c67a6b",
       "function": "setFeed(address,uint32,uint256)",
-      "functionAbi": "function setFeed(address asset, uint32 feedId, uint256 maxAge)",
       "arguments": [
         "0x128cC466B61f542da60c70e3aA11c10e19B84EDB",
         "2",
@@ -158,7 +152,6 @@
       "contractName": null,
       "contractAddress": "0xc85f7c6dcfc9ca544c72ebab93881a34485b1652",
       "function": "addMarket(address,(address,address,address,address,uint8,uint16,uint16,uint16,uint16,uint16,uint256,uint256,bool,bool,bool,bool))",
-      "functionAbi": "function addMarket(address asset, tuple(address sToken, address debtToken, address interestModel, address oracle, uint8 decimals, uint16 ltv, uint16 liqThreshold, uint16 liqBonus, uint16 reserveFactor, uint16 closeFactor, uint256 supplyCap, uint256 borrowCap, bool borrowEnabled, bool collateralEnabled, bool active, bool paused) config)",
       "arguments": [
         "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
         "(0x0cC0032b8299b517A1111E59E11a476F71b9A9Ab, 0xa5dc8CDb0D575D894DDc40f7eF914B852a091E08, 0x84393560Bc91a1C2eDea435dfdb704Ad17df0886, 0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B, 6, 0, 0, 500, 1000, 5000, 10000000000, 8000000000, true, false, true, false)"
@@ -181,7 +174,6 @@
       "contractName": null,
       "contractAddress": "0xc85f7c6dcfc9ca544c72ebab93881a34485b1652",
       "function": "addMarket(address,(address,address,address,address,uint8,uint16,uint16,uint16,uint16,uint16,uint256,uint256,bool,bool,bool,bool))",
-      "functionAbi": "function addMarket(address asset, tuple(address sToken, address debtToken, address interestModel, address oracle, uint8 decimals, uint16 ltv, uint16 liqThreshold, uint16 liqBonus, uint16 reserveFactor, uint16 closeFactor, uint256 supplyCap, uint256 borrowCap, bool borrowEnabled, bool collateralEnabled, bool active, bool paused) config)",
       "arguments": [
         "0x128cC466B61f542da60c70e3aA11c10e19B84EDB",
         "(0xC0d1B3E34939c5942745CfF3d9D51850aC4c5D5c, 0x4264570Af421bbD69BAD69594E11E07A378fa105, 0x84393560Bc91a1C2eDea435dfdb704Ad17df0886, 0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B, 18, 7200, 8000, 800, 1500, 5000, 5000000000000000000, 0, false, true, true, false)"
@@ -204,7 +196,6 @@
       "contractName": null,
       "contractAddress": "0xc85f7c6dcfc9ca544c72ebab93881a34485b1652",
       "function": "setBorrowFee(address,uint16)",
-      "functionAbi": "function setBorrowFee(address asset, uint16 feeBps)",
       "arguments": [
         "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
         "50"
@@ -226,7 +217,7 @@
   "libraries": [],
   "pending": [],
   "returns": {},
-  "timestamp": 1793279265768,
+  "timestamp": 1793281044710,
   "chain": 5042,
-  "commit": "0dacbf1f7"
+  "commit": null
 }
