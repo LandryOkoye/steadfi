@@ -1,5 +1,5 @@
 /**
- * useSteadFi — wagmi hooks for reading live SteadFi state from Arc Testnet.
+ * useSteadFi — wagmi hooks for reading live SteadFi state from Arc.
  * Every value here comes from a contract read. Prices come from the on-chain
  * PythOracleAdapter and rates from the market's interest-rate model.
  */

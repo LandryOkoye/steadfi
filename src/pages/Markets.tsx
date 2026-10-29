@@ -1,7 +1,7 @@
 /**
  * Markets — protocol overview (Aave-style): market totals header, searchable
  * asset table with supply/borrow sizes and rates, and a details link per asset.
- * All data is live from LendingPool on Arc Testnet.
+ * All data is live from LendingPool on Arc.
  */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'

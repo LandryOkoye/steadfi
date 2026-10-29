@@ -279,8 +279,8 @@ function YourInfo({ symbol, paused }: { symbol: TokenSymbol; paused: boolean }) 
           {wallet === 0n && (
             <p className="mt-3 text-xs text-[var(--color-muted-foreground)]">
               No {symbol} in your wallet.{' '}
-              {(symbol === 'USDC' || symbol === 'EURC') && (
-                <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="text-[var(--color-primary)] hover:underline">Get testnet {symbol}</a>
+              {(symbol === 'USDC') && (
+                <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="text-[var(--color-primary)] hover:underline">Get USDC</a>
               )}
             </p>
           )}

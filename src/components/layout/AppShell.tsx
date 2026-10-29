@@ -98,11 +98,11 @@ export default function AppShell() {
 
         <footer className="border-t border-[var(--color-border)]">
           <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-3 px-4 md:px-6 pt-5 pb-20 text-xs text-[var(--color-muted-foreground)]">
-            <span>SteadFi on Arc Testnet · Contracts not yet audited</span>
+            <span>SteadFi on Arc · </span>
             <div className="flex items-center gap-4">
               <GasEstimate />
-              <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-foreground)]">
-                Testnet faucet <ArrowSquareOut size={11} aria-hidden="true" />
+              <a href="" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-foreground)]">
+                Stablecoins <ArrowSquareOut size={11} aria-hidden="true" />
               </a>
             </div>
           </div>
@@ -147,10 +147,10 @@ export default function AppShell() {
                 </nav>
                 <div className="border-t border-[var(--color-border)] p-5 space-y-3">
                   <GasEstimate />
-                  <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
+                  {/*<a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 text-xs text-[var(--color-primary)] hover:underline">
-                    <TestTube size={14} aria-hidden="true" /> Get testnet USDC
-                  </a>
+                      <TestTube size={14} aria-hidden="true" /> Get USDC
+                  </a>*/}
                 </div>
               </motion.aside>
             </div>

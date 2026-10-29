@@ -14,7 +14,7 @@ export default function RiskDisclosure({ includesBridge = false }: RiskDisclosur
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <WarningCircle size={15} className="shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
         <span className="font-medium text-[var(--color-foreground)]">Risks</span>
-        <span className="truncate">Unaudited testnet contracts, liquidation risk</span>
+        <span className="truncate">Unaudited contracts, liquidation risk</span>
         <CaretDown size={13} className="ml-auto shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       <ul className="list-disc space-y-1 px-4 pb-3 pl-9">
