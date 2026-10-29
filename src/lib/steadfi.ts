@@ -35,10 +35,24 @@ const MAINNET_TOKENS = {
     collateralEnabled: false,
     borrowEnabled: true,
   },
+  EURC: {
+    address: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1' as `0x${string}`,
+    decimals: 6,
+    symbol: 'EURC',
+    collateralEnabled: false,
+    borrowEnabled: true,
+  },
   cirBTC: {
     address: '0x171A4217b86A807A64eB94757Db6849fb4bDbAA0' as `0x${string}`,
     decimals: 8,
     symbol: 'cirBTC',
+    collateralEnabled: true,
+    borrowEnabled: false,
+  },
+  WETH: {
+    address: '0x128cC466B61f542da60c70e3aA11c10e19B84EDB' as `0x${string}`,
+    decimals: 18,
+    symbol: 'WETH',
     collateralEnabled: true,
     borrowEnabled: false,
   },
@@ -49,13 +63,13 @@ const MAINNET_CONTRACTS = {
   Timelock:     null as `0x${string}` | null,  // No Timelock on mainnet v1
   PythOracle:   '0x4B526e6f7E1d82959E0f95F14B2e7f7893C67A6B' as `0x${string}`,
   sUSDC:   '0x72540DB2aFe9f6C0b07Ae1E8358c1D22AD12fF1F' as `0x${string}`,
-  sEURC:   null as `0x${string}` | null,
+  sEURC:   '0x0cC0032b8299b517A1111E59E11a476F71b9A9Ab' as `0x${string}`,
   sCIRBTC: '0xe3e65b944aaa9c7B6fF632DDA7a36d2cE71ac672' as `0x${string}`,
-  sWETH:   null as `0x${string}` | null,
+  sWETH:   '0xC0d1B3E34939c5942745CfF3d9D51850aC4c5D5c' as `0x${string}`,
   dUSDC:   '0x4AaFD6AA21712E0231EE276C40F9981E6Bd52433' as `0x${string}`,
-  dEURC:   null as `0x${string}` | null,
+  dEURC:   '0xa5dc8CDb0D575D894DDc40f7eF914B852a091E08' as `0x${string}`,
   dCIRBTC: '0x1f279771B5A0E38e68BC0EcaEC8C7827430Bf564' as `0x${string}`,
-  dWETH:   null as `0x${string}` | null,
+  dWETH:   '0x4264570Af421bbD69BAD69594E11E07A378fa105' as `0x${string}`,
 } as const
 
 const MAINNET_POOL_DEPLOY_BLOCK = 28_392_864n
@@ -115,24 +129,24 @@ const TESTNET_LEGACY_POOL = '0x252E8662C945e340195B35816a3f9259CA264e8C' as `0x$
 
 /**
  * Token definitions for the active network.
- * On mainnet: USDC + cirBTC only.
- * On testnet: USDC + EURC + cirBTC + WETH.
+ * Both mainnet and testnet have all four markets: USDC, EURC, cirBTC, WETH.
+ * Mainnet uses different underlying token addresses (see MAINNET_TOKENS).
  */
-export const TOKENS = (IS_MAINNET ? MAINNET_TOKENS : TESTNET_TOKENS) as typeof TESTNET_TOKENS
+export const TOKENS = (IS_MAINNET ? MAINNET_TOKENS : TESTNET_TOKENS)
 
 export type TokenSymbol = keyof typeof TOKENS
 
 export const COLLATERAL_TOKENS: TokenSymbol[] = IS_MAINNET
-  ? ['cirBTC']
+  ? ['cirBTC', 'WETH']
   : ['cirBTC', 'WETH']
 
 export const BORROW_TOKENS: TokenSymbol[] = IS_MAINNET
-  ? ['USDC']
+  ? ['USDC', 'EURC']
   : ['USDC', 'EURC']
 
 /** All symbols for the active network — drives market lists, hooks, admin pages. */
 export const SYMBOLS: TokenSymbol[] = IS_MAINNET
-  ? ['USDC', 'cirBTC']
+  ? ['USDC', 'EURC', 'cirBTC', 'WETH']
   : ['USDC', 'EURC', 'cirBTC', 'WETH']
 
 export const CONTRACTS = (IS_MAINNET ? MAINNET_CONTRACTS : TESTNET_CONTRACTS)
