@@ -15,7 +15,7 @@ import {
   tokenAmountToNumber, usdFromTokenAmount, ARC_CHAIN_ID,
 } from '../lib/steadfi'
 
-export const SYMBOLS: TokenSymbol[] = ['USDC', 'EURC', 'cirBTC', 'WETH']
+export const SYMBOLS: TokenSymbol[] = Object.keys(TOKENS) as TokenSymbol[]
 
 /**
  * Predefined loan durations (days) enforced by LendingPool.borrowWithTerm.
