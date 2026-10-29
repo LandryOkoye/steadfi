@@ -9,6 +9,7 @@ import {
   ArrowRight, ArrowsLeftRight, CalendarCheck, ChartLineUp, CurrencyCircleDollar, GasPump, LockKey,
   Note, ShieldCheck,
 } from '@phosphor-icons/react'
+import { NetworkArc } from '@web3icons/react'
 import Logo from '../components/ui/Logo'
 import TokenIcon, { TOKEN_NAMES } from '../components/ui/TokenIcon'
 import { useMarketData } from '../hooks/useSteadFi'
@@ -52,9 +53,9 @@ export default function Landing() {
               <motion.p variants={reveal} initial="hidden" animate="show" custom={0}
                 className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-white/70 py-1 pl-1 pr-3 text-xs font-medium text-[var(--color-muted-foreground)] shadow-sm">
                 <span className="grid h-6 w-6 place-items-center rounded-full bg-[var(--color-muted)]">
-                  <span className="block h-3.5 w-3.5 rounded-full bg-[#6B21A8]" aria-hidden="true" />
+                  <NetworkArc variant="branded" size={15} aria-hidden="true" />
                 </span>
-                Live on Arc Testnet · Gas paid in USDC
+                Live on Arc · Gas paid in USDC
               </motion.p>
               <motion.h1 variants={reveal} initial="hidden" animate="show" custom={1}
                 className="mt-6 text-[44px] leading-[1.02] font-bold md:text-[68px] tracking-[-0.035em]">
@@ -150,7 +151,7 @@ export default function Landing() {
             <Feature span="md:col-span-3" Icon={ChartLineUp} title="Pyth Pro prices" body="Collateral is valued with Pyth’s low-latency feeds, pushed on-chain and rejected when stale." />
             <Feature span="md:col-span-2" Icon={CalendarCheck} title="Fixed terms" body="Choose 7 to 180 days. The due date is recorded on-chain." />
             <Feature span="md:col-span-2" Icon={CurrencyCircleDollar} title="Costs upfront" body="One-time fee, rate and total to repay are shown before you sign." />
-            <Feature span="md:col-span-2" Icon={ArrowsLeftRight} title="Bridge with CCTP" body="Move USDC in from Ethereum, Base, Arbitrum and OP testnets." />
+            <Feature span="md:col-span-2" Icon={ArrowsLeftRight} title="Bridge with CCTP" body="Move USDC in from Ethereum, Base, Arbitrum and OP mainnets." />
             <Feature span="md:col-span-3" Icon={LockKey} title="Timelocked changes" body="Risk parameter changes queue in a timelock before they apply, giving users time to react." />
             <Feature span="md:col-span-3" Icon={Note} title="Payment references" body="Attach an invoice number or reference to a repayment. It is stored on-chain with the transaction." />
           </div>
@@ -169,16 +170,16 @@ export default function Landing() {
                 Put your dollars to work <span className="text-gradient">on Arc.</span>
               </h2>
               <p className="mx-auto mt-5 max-w-lg text-[var(--color-muted-foreground)]">
-                Connect a wallet, grab testnet USDC from Circle’s faucet, and try a full lend-borrow-repay cycle.
+                Connect a wallet, supply USDC/EURC or cirBTC/WETH, and go through the lend-borrow-repay cycle.
               </p>
               <div className="mt-9 flex flex-wrap justify-center gap-3">
                 <Link to="/dashboard" className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-6 text-[15px] font-semibold text-[#07080B] hover:opacity-90 transition-base">
                   Launch app <ArrowRight size={16} aria-hidden="true" />
                 </Link>
-                <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
+                {/*<a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
                   className="inline-flex h-12 items-center rounded-full border border-[var(--color-border-strong)] px-6 text-[15px] font-semibold hover:bg-[var(--color-muted)] transition-base">
-                  Get testnet USDC
-                </a>
+                  Get USDC
+                </a>*/}
               </div>
             </div>
           </motion.div>
@@ -192,11 +193,11 @@ export default function Landing() {
             <Link to="/dashboard" className="hover:text-[var(--color-foreground)]">App</Link>
             <Link to="/markets" className="hover:text-[var(--color-foreground)]">Markets</Link>
             <Link to="/bridge" className="hover:text-[var(--color-foreground)]">Bridge</Link>
-            <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--color-foreground)]">Faucet</a>
+                {/*<a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--color-foreground)]">Faucet</a>*/}
           </nav>
         </div>
         <p className="mx-auto max-w-6xl px-4 pb-10 text-xs leading-relaxed text-[var(--color-muted-foreground)] md:px-6">
-          SteadFi runs on Arc Testnet with test tokens only. The smart contracts have not been externally audited.
+          SteadFi runs on Arc with USDC as the gas token. The smart contracts have not been externally audited.
           Nothing on this site is financial advice. Borrowing carries liquidation risk.
         </p>
       </footer>

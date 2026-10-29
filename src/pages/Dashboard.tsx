@@ -97,7 +97,7 @@ export default function Dashboard() {
     <div className="space-y-8">
       {/* ── Header ── */}
       <motion.section initial="hidden" animate="show" custom={0} variants={fadeUp}>
-        <p className="text-sm text-[var(--color-muted-foreground)]">Arc Testnet market</p>
+        <p className="text-sm text-[var(--color-muted-foreground)]">Arc market</p>
         <h1 className="mt-1 text-3xl md:text-4xl font-semibold">Dashboard</h1>
 
         {isConnected && (

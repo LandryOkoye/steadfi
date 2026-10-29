@@ -1,5 +1,5 @@
 /**
- * useSteadFi — wagmi hooks for reading live SteadFi state from Arc Testnet.
+ * useSteadFi — wagmi hooks for reading live SteadFi state from Arc.
  * Every value here comes from a contract read. Prices come from the on-chain
  * PythOracleAdapter and rates from the market's interest-rate model.
  */
@@ -15,7 +15,7 @@ import {
   tokenAmountToNumber, usdFromTokenAmount, ARC_CHAIN_ID,
 } from '../lib/steadfi'
 
-export const SYMBOLS: TokenSymbol[] = ['USDC', 'EURC', 'cirBTC', 'WETH']
+export const SYMBOLS: TokenSymbol[] = Object.keys(TOKENS) as TokenSymbol[]
 
 /**
  * Predefined loan durations (days) enforced by LendingPool.borrowWithTerm.

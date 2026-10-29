@@ -1,5 +1,5 @@
 /**
- * Bridge In — real CCTP transfer into Arc Testnet using Circle App Kit.
+ * Bridge In — real CCTP transfer into Arc using Circle App Kit.
  * The user signs a burn on the source chain and a mint on Arc from their wallet.
  */
 import { useState } from 'react'
@@ -95,7 +95,7 @@ export default function Bridge() {
         <p className="text-sm text-[var(--color-muted-foreground)]">Circle CCTP</p>
         <h1 className="mt-1 text-3xl md:text-4xl font-semibold">Bridge USDC to Arc</h1>
         <p className="text-sm text-[var(--color-muted-foreground)] mt-2">
-          Move USDC from another testnet to Arc with Circle’s Cross-Chain Transfer Protocol, then supply it on SteadFi.
+          Move USDC to Arc with Circle’s Cross-Chain Transfer Protocol, then supply it on SteadFi.
         </p>
       </div>
 
@@ -132,12 +132,12 @@ export default function Bridge() {
 
         <div className="mt-4 rounded-[14px] border border-[var(--color-border)] p-3 text-xs space-y-1">
           <p><span className="text-[var(--color-muted-foreground)]">From:</span> {source.label}</p>
-          <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc Testnet (domain {CCTP!.domain})</p>
+          <p><span className="text-[var(--color-muted-foreground)]">To:</span> Arc (domain {CCTP!.domain})</p>
           <p className="break-all"><span className="text-[var(--color-muted-foreground)]">Mint recipient:</span> {isConnected ? 'your connected wallet' : 'connect wallet'}</p>
         </div>
 
         <p className="text-xs text-[var(--color-muted-foreground)] mt-3">
-          Your wallet will ask you to switch to {source.label} for the burn, then to Arc Testnet for the mint.
+          Your wallet will ask you to switch to {source.label} for the burn, then to Arc for the mint.
           Both transactions are signed by you.
         </p>
 
@@ -189,14 +189,14 @@ export default function Bridge() {
           </div>
           {result.state === 'success' && (
             <p className="text-xs text-[var(--color-success)] mt-3">
-              USDC has arrived on Arc Testnet. Supply it from your Dashboard to start earning.
+              USDC has arrived on Arc. Supply it from your Dashboard to start earning.
             </p>
           )}
         </Card>
       )}
 
       <Card>
-        <CardHeader><CardTitle>CCTP contracts (Arc Testnet)</CardTitle></CardHeader>
+        <CardHeader><CardTitle>CCTP contracts (Arc)</CardTitle></CardHeader>
         <div className="rounded-[14px] border border-[var(--color-border)] p-3 text-xs font-mono space-y-1 overflow-x-auto">
           <p className="text-[var(--color-muted-foreground)]">// MessageTransmitterV2</p>
           <p className="break-all">{CCTP!.MessageTransmitterV2}</p>
@@ -218,7 +218,7 @@ export default function Bridge() {
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs text-[var(--color-primary)] hover:underline"
           >
-            Circle testnet faucet <ArrowSquareOut size={11} aria-hidden="true" />
+            USDC faucet <ArrowSquareOut size={11} aria-hidden="true" />
           </a>
         </div>
       </Card>
@@ -226,8 +226,8 @@ export default function Bridge() {
       <div className="flex gap-3 p-4 rounded-2xl bg-[var(--color-muted)] border border-[var(--color-border)]">
         <Info size={16} className="text-[var(--color-primary)] shrink-0 mt-0.5" aria-hidden="true" />
         <p className="text-xs text-[var(--color-muted-foreground)]">
-          CCTP bridging is permissionless and non-custodial. Attestations usually arrive within 2–5 minutes on testnet.
-          Arc Testnet uses USDC for gas, so you do not need any other token.
+          CCTP bridging is permissionless and non-custodial. Attestations usually arrive within 2–5 minutes.
+          Arc uses USDC for gas, so you do not need any other token.
         </p>
       </div>
     </div>

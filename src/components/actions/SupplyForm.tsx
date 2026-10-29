@@ -121,7 +121,7 @@ export default function SupplyForm({ symbol, onDone, setBusy }: ActionFormProps)
           </Button>
         )}
       </div>
-      <div className="mt-4"><RiskDisclosure includesBridge={token.collateralEnabled} /></div>
+      {/*<div className="mt-4"><RiskDisclosure includesBridge={token.collateralEnabled} /></div>*/}
     </div>
   )
 }

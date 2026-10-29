@@ -176,7 +176,7 @@ export default function BorrowForm({ symbol, onDone, setBusy }: ActionFormProps)
       <Button variant="primary" size="lg" className="w-full mt-5" loading={pending} disabled={blocked} onClick={() => void submit()}>
         {amt === 0n ? 'Enter an amount' : `Borrow ${symbol}`}
       </Button>
-      <div className="mt-4"><RiskDisclosure /></div>
+      {/*<div className="mt-4"><RiskDisclosure /></div>*/}
     </div>
   )
 }
