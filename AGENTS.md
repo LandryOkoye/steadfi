@@ -168,9 +168,22 @@ NETWORK=mainnet bun run src/keeper.ts
 # or for a single cycle:
 NETWORK=mainnet RUN_ONCE=1 bun run src/keeper.ts
 ```
-Keeper wallet must have enough USDC for gas. Balance check: `cast balance $KEEPER_ADDRESS --rpc-url https://rpc.mainnet.arc.io --ether`
+### Admin keeper console (2026-10-29)
+- Browser-based keeper UI at `/admin/keeper` (ungated — any connected wallet can run it; keeper calls are permissionless).
+- Serverless Pyth proxy: `api/_pyth.ts` + `api/pyth-latest.ts` (Vercel). `PYTH_API_KEY` must be set as a server-side Vercel Environment Variable (NOT `VITE_*`). Vite dev proxies `POST /api/pyth-latest` via a plugin in `vite.config.ts`.
+- Wallet storage: `src/admin/keeper/wallet.ts` — browser keeper key is PBKDF2-SHA256 (210k iter) → AES-GCM encrypted in `localStorage`; decrypted key held in memory only while unlocked.
+- Engine: `src/admin/keeper/engine.ts` — price cycle (gas-saver, simulate-then-send), liquidation cycle (Borrow events via `src/lib/logs.ts`, close-factor cap, exact approve), safety rails (interval, session budget, min balance, dry-run, no concurrent cycles).
+- Provider: `src/admin/keeper/KeeperProvider.tsx` — owns one engine instance mounted above admin routes; two modes: browser keeper (auto-run) or connected wallet (run-once only).
+- Page: `src/admin/pages/Keeper.tsx` — status, wallet, live prices, stats, settings, activity log.
+- Safety: never run the laptop keeper and the browser keeper simultaneously on the same wallet (nonce clash); on different wallets it's safe but wastes gas. Budget guardrails cap session gas spending.
+- Node keeper (`steadfi/keeper/src/keeper.ts`) still exists for unattended use; unchanged behavior.
 
-### Source files (mainnet-aware)
+#### Money-loss risks (review before mainnet use)
+- Every price push and liquidation spends USDC gas on Arc. On mainnet this costs real funds — use budget guardrails and test on testnet first.
+- Browser keeper is a hot wallet — keep only a small balance; never reuse testnet keys on mainnet.
+- Export key reveals plaintext private key — copy somewhere safe, never share.
+- "Forget wallet" deletes the localStorage entry; withdraw/export funds first.
+
 - `steadfi/contracts/script/DeployMainnet.s.sol` — mainnet deploy script
 - `steadfi/contracts/deployments/mainnet.json` — full mainnet deployment manifest
 - `src/lib/steadfi.ts` — dual network address sets; `VITE_NETWORK=mainnet|testnet`

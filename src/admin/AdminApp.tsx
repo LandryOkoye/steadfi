@@ -2,12 +2,16 @@
  * Admin console — separate shell and routes under /admin, lazily loaded so the
  * public app never downloads it. Access is gated by on-chain roles; the
  * contracts enforce every permission regardless of what the UI shows.
+ *
+ * The Keeper page is ungated: keeper actions are permissionless and spend
+ * only the keeper wallet's gas, so any connected wallet can run it. Every
+ * other admin page stays behind AdminGate.
  */
 import { NavLink, Navigate, Outlet, Route, Routes, Link } from 'react-router-dom'
 import { ConnectKitButton } from 'connectkit'
 import { useAccount } from 'wagmi'
 import {
-  ChartLineUp, SlidersHorizontal, Vault, UsersThree, Clock, ArrowLeft, ShieldCheck,
+  ChartLineUp, SlidersHorizontal, Vault, UsersThree, Clock, ArrowLeft, ShieldCheck, Robot,
 } from '@phosphor-icons/react'
 import NetworkBadge from '../components/ui/NetworkBadge'
 import Logo from '../components/ui/Logo'
@@ -20,6 +24,8 @@ import MarketsAdmin from './pages/MarketsAdmin'
 import Treasury from './pages/Treasury'
 import Access from './pages/Access'
 import Governance from './pages/Governance'
+import Keeper from './pages/Keeper'
+import { KeeperProvider } from './keeper/KeeperProvider'
 import { CONTRACTS } from '../lib/steadfi'
 
 const NAV = [
@@ -27,7 +33,9 @@ const NAV = [
   { to: '/admin/markets',    label: 'Markets',    Icon: SlidersHorizontal },
   { to: '/admin/treasury',   label: 'Treasury',   Icon: Vault },
   { to: '/admin/access',     label: 'Access',     Icon: UsersThree },
-  // Governance/Timelock tab hidden when no Timelock contract (e.g. mainnet).
+  // Keeper is outside the role gate: keeper actions are permissionless and
+  // spend only the keeper wallet's gas. Any connected wallet can run it.
+  { to: '/admin/keeper',     label: 'Keeper',     Icon: Robot },
   ...(CONTRACTS.Timelock ? [{ to: '/admin/governance', label: 'Timelock', Icon: Clock }] : []),
 ]
 
@@ -143,16 +151,21 @@ function GateMessage({ title, body, children }: { title: string; body: string; c
 
 export default function AdminApp() {
   return (
-    <Routes>
-      <Route element={<AdminGate />}>
-        <Route index element={<Navigate to="overview" replace />} />
-        <Route path="overview"   element={<Overview />} />
-        <Route path="markets"    element={<MarketsAdmin />} />
-        <Route path="treasury"   element={<Treasury />} />
-        <Route path="access"     element={<Access />} />
-        <Route path="governance" element={<Governance />} />
-        <Route path="*"          element={<Navigate to="overview" replace />} />
-      </Route>
-    </Routes>
+    <KeeperProvider>
+      <Routes>
+        {/* Ungated: keeper actions are permissionless, spend only the keeper wallet's gas. */}
+        <Route path="keeper" element={<Keeper />} />
+        {/* Gated: all other admin pages require an on-chain role. */}
+        <Route element={<AdminGate />}>
+          <Route index element={<Navigate to="overview" replace />} />
+          <Route path="overview"   element={<Overview />} />
+          <Route path="markets"    element={<MarketsAdmin />} />
+          <Route path="treasury"   element={<Treasury />} />
+          <Route path="access"     element={<Access />} />
+          <Route path="governance" element={<Governance />} />
+          <Route path="*"          element={<Navigate to="overview" replace />} />
+        </Route>
+      </Routes>
+    </KeeperProvider>
   )
 }
