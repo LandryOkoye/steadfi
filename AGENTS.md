@@ -168,15 +168,13 @@ NETWORK=mainnet bun run src/keeper.ts
 # or for a single cycle:
 NETWORK=mainnet RUN_ONCE=1 bun run src/keeper.ts
 ```
-### Admin keeper console (2026-10-29)
-- Browser-based keeper UI at `/admin/keeper` (ungated — any connected wallet can run it; keeper calls are permissionless).
-- Serverless Pyth proxy: `api/_pyth.ts` + `api/pyth-latest.ts` (Vercel). `PYTH_API_KEY` must be set as a server-side Vercel Environment Variable (NOT `VITE_*`). Vite dev proxies `POST /api/pyth-latest` via a plugin in `vite.config.ts`.
-- Wallet storage: `src/admin/keeper/wallet.ts` — browser keeper key is PBKDF2-SHA256 (210k iter) → AES-GCM encrypted in `localStorage`; decrypted key held in memory only while unlocked.
-- Engine: `src/admin/keeper/engine.ts` — price cycle (gas-saver, simulate-then-send), liquidation cycle (Borrow events via `src/lib/logs.ts`, close-factor cap, exact approve), safety rails (interval, session budget, min balance, dry-run, no concurrent cycles).
-- Provider: `src/admin/keeper/KeeperProvider.tsx` — owns one engine instance mounted above admin routes; two modes: browser keeper (auto-run) or connected wallet (run-once only).
-- Page: `src/admin/pages/Keeper.tsx` — status, wallet, live prices, stats, settings, activity log.
-- Safety: never run the laptop keeper and the browser keeper simultaneously on the same wallet (nonce clash); on different wallets it's safe but wastes gas. Budget guardrails cap session gas spending.
-- Node keeper (`steadfi/keeper/src/keeper.ts`) still exists for unattended use; unchanged behavior.
+### Admin keeper console (2026-10-29, rebuilt 2026-10-31)
+- `/admin/keeper` renders inside the admin shell and needs **no role** (keeper calls are permissionless). Wallets without a role see only the Keeper tab; every other admin page stays behind `RoleGate`.
+- Pyth proxy: `api/pyth-latest.ts` (Vercel function) + `api/_pyth.ts` (core, also used by the dev plugin in `vite.config.ts`). Feed allowlist 1/2/327, fixed upstream body, 2s cache, **no CORS**. Returns `{ evmPayload, feeds[{feedId, price, exponent, publishTime}] }`. `PYTH_API_KEY` must be a server-side Vercel env var (never `VITE_*`).
+- Wallet (`src/admin/keeper/wallet.ts`): browser keeper key encrypted with PBKDF2-SHA256 (210k) → AES-GCM, stored per chain id (`steadfi.keeper.wallet.v2.<chainId>`), decrypted only in memory. Fund (from connected wallet), Withdraw all, Export key, Lock, Forget.
+- Engine (`src/admin/keeper/engine.ts`): per cycle reads borrower HFs (Borrow events via `src/lib/logs.ts`), then pushes prices **only if Pyth has a newer, still-fresh value** for a feed that is stale or within `refreshMarginSec` of stale (or a loan is near liquidation) — so a dormant EUR/USD feed on weekends never triggers pushes. Then liquidates HF < 1 (close-factor cap, exact approve, keeps a USDC gas reserve). Every tx is simulated + gas-estimated + budget-checked before sending.
+- Safety rails: session budget (auto-stop), minimum balance (auto-stop), dry run, single cycle at a time, one runner per wallet per browser (`navigator.locks`), beforeunload warning while running.
+- Provider (`src/admin/keeper/KeeperProvider.tsx`) is mounted above the admin routes, so switching admin tabs doesn't stop the keeper; closing the tab does. Connected-wallet mode = Run once only.
 
 #### Money-loss risks (review before mainnet use)
 - Every price push and liquidation spends USDC gas on Arc. On mainnet this costs real funds — use budget guardrails and test on testnet first.
