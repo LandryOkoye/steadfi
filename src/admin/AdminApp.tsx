@@ -5,7 +5,7 @@
  *
  * The Keeper page is ungated: keeper actions are permissionless and spend
  * only the keeper wallet's gas, so any connected wallet can run it. Every
- * other admin page stays behind AdminGate.
+ * other admin page stays behind RoleGate.
  */
 import { NavLink, Navigate, Outlet, Route, Routes, Link } from 'react-router-dom'
 import { ConnectKitButton } from 'connectkit'
@@ -33,14 +33,14 @@ const NAV = [
   { to: '/admin/markets',    label: 'Markets',    Icon: SlidersHorizontal },
   { to: '/admin/treasury',   label: 'Treasury',   Icon: Vault },
   { to: '/admin/access',     label: 'Access',     Icon: UsersThree },
-  // Keeper is outside the role gate: keeper actions are permissionless and
-  // spend only the keeper wallet's gas. Any connected wallet can run it.
-  { to: '/admin/keeper',     label: 'Keeper',     Icon: Robot },
+  { to: '/admin/keeper',     label: 'Keeper',     Icon: Robot, open: true },
   ...(CONTRACTS.Timelock ? [{ to: '/admin/governance', label: 'Timelock', Icon: Clock }] : []),
 ]
 
 function AdminShell() {
   const roles = useAdminRoles()
+  // Non-admins (e.g. judges) only see the Keeper tab, which needs no role.
+  const nav = roles.isAnyAdmin ? NAV : NAV.filter(n => 'open' in n)
   const badges = [
     roles.isOwner && 'Owner',
     roles.isRiskAdmin && 'Risk admin',
@@ -54,7 +54,7 @@ function AdminShell() {
         <div className="h-0.5 bg-[color-mix(in_srgb,var(--color-warning)_70%,transparent)]" aria-hidden="true" />
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 md:px-6 h-16">
           <div className="flex items-center gap-3 min-w-0">
-            <Link to="/admin/overview" aria-label="Admin overview"><Logo size={26} /></Link>
+            <Link to={roles.isAnyAdmin ? '/admin/overview' : '/admin/keeper'} aria-label="Admin home"><Logo size={26} /></Link>
             <span className="flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--color-warning)_15%,transparent)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-warning)]">
               <ShieldCheck size={13} aria-hidden="true" /> Admin console
             </span>
@@ -65,7 +65,7 @@ function AdminShell() {
           </div>
         </div>
         <nav className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4 md:px-6" aria-label="Admin navigation">
-          {NAV.map(({ to, label, Icon }) => (
+          {nav.map(({ to, label, Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -103,14 +103,14 @@ function AdminShell() {
   )
 }
 
-/** Blocks the console unless the connected wallet holds an admin role on-chain. */
-function AdminGate() {
+/** Shows the gated admin pages only to wallets holding an on-chain admin role. */
+function RoleGate() {
   const { isConnected, address } = useAccount()
   const roles = useAdminRoles()
 
   if (!isConnected) {
     return (
-      <GateMessage title="Admin console" body="Connect an admin wallet to continue.">
+      <GateMessage title="Admin console" body="Connect an admin wallet to continue. The Keeper tab works with any wallet.">
         <ConnectKitButton />
       </GateMessage>
     )
@@ -126,19 +126,19 @@ function AdminGate() {
   if (!roles.isAnyAdmin) {
     return (
       <GateMessage
-        title="Access denied"
-        body={`${address ? shortAddr(address) : 'This wallet'} has no admin role on the SteadFi LendingPool or Timelock. Switch to an admin wallet in your wallet extension.`}
+        title="Admin role required"
+        body={`${address ? shortAddr(address) : 'This wallet'} has no admin role on the SteadFi LendingPool or Timelock. Keeper actions are permissionless, so you can still run the keeper.`}
       >
-        <Link to="/markets" className="text-sm text-[var(--color-primary)] underline">Back to the app</Link>
+        <Link to="/admin/keeper" className="text-sm text-[var(--color-primary)] underline">Open the keeper console</Link>
       </GateMessage>
     )
   }
-  return <AdminShell />
+  return <Outlet />
 }
 
 function GateMessage({ title, body, children }: { title: string; body: string; children?: React.ReactNode }) {
   return (
-    <div className="min-h-dvh grid place-items-center bg-[var(--color-background)] p-4">
+    <div className="grid place-items-center py-16">
       <Card className="max-w-sm w-full text-center space-y-3">
         <ShieldCheck size={28} className="mx-auto text-[var(--color-warning)]" aria-hidden="true" />
         <h1 className="text-lg font-bold" style={{ fontFamily: 'var(--font-heading)' }}>{title}</h1>
@@ -153,17 +153,18 @@ export default function AdminApp() {
   return (
     <KeeperProvider>
       <Routes>
-        {/* Ungated: keeper actions are permissionless, spend only the keeper wallet's gas. */}
-        <Route path="keeper" element={<Keeper />} />
-        {/* Gated: all other admin pages require an on-chain role. */}
-        <Route element={<AdminGate />}>
-          <Route index element={<Navigate to="overview" replace />} />
-          <Route path="overview"   element={<Overview />} />
-          <Route path="markets"    element={<MarketsAdmin />} />
-          <Route path="treasury"   element={<Treasury />} />
-          <Route path="access"     element={<Access />} />
-          <Route path="governance" element={<Governance />} />
-          <Route path="*"          element={<Navigate to="overview" replace />} />
+        <Route element={<AdminShell />}>
+          {/* Keeper calls are permissionless and spend only the keeper wallet's gas. */}
+          <Route path="keeper" element={<Keeper />} />
+          <Route element={<RoleGate />}>
+            <Route index element={<Navigate to="overview" replace />} />
+            <Route path="overview"   element={<Overview />} />
+            <Route path="markets"    element={<MarketsAdmin />} />
+            <Route path="treasury"   element={<Treasury />} />
+            <Route path="access"     element={<Access />} />
+            <Route path="governance" element={<Governance />} />
+            <Route path="*"          element={<Navigate to="overview" replace />} />
+          </Route>
         </Route>
       </Routes>
     </KeeperProvider>

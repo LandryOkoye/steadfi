@@ -4,10 +4,12 @@
  * paused markets, production key setup).
  */
 import { useBytecode } from 'wagmi'
+import { Link } from 'react-router-dom'
 import { ArrowSquareOut, Warning, CheckCircle } from '@phosphor-icons/react'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import TokenIcon from '../../components/ui/TokenIcon'
 import { ARC_CHAIN_ID, CONTRACTS, addrUrl } from '../../lib/steadfi'
+import { useKeeper } from '../keeper/KeeperProvider'
 import { useAdminMarkets, useKeeperBalance, useTimelockInfo, type AdminMarket } from '../useAdmin'
 import { KEEPER_ADDRESS, KEEPER_LOW_BALANCE_USDC } from '../abi'
 import { KpiTile, Pill, fmtAmount, fmtUsd, shortAddr, usdOf } from '../components'
@@ -30,6 +32,7 @@ function sumUsd(markets: AdminMarket[], pick: (m: AdminMarket) => bigint): numbe
 export default function Overview() {
   const { markets, loading } = useAdminMarkets()
   const keeper = useKeeperBalance()
+  const browserKeeper = useKeeper()
   const timelock = useTimelockInfo()
   const adminCode = useBytecode({ address: timelock.admin ?? undefined, chainId: ARC_CHAIN_ID, query: { enabled: !!timelock.admin } })
 
@@ -156,6 +159,10 @@ export default function Overview() {
             <p className="flex justify-between"><span className="text-[var(--color-muted-foreground)]">Estimated runway</span>
               <span className="mono">{keeperUsdc === null ? '…' : `${(keeperUsdc / KEEPER_USD_PER_DAY).toFixed(1)} days`}</span></p>
             <p className="text-[11px] text-[var(--color-muted-foreground)]">Based on one Pyth update per minute (~${KEEPER_USD_PER_DAY}/day).</p>
+            <p className="flex justify-between border-t border-[var(--color-border)] pt-2"><span className="text-[var(--color-muted-foreground)]">Browser keeper</span>
+              <Link to="/admin/keeper" className="text-[var(--color-primary)] hover:underline">
+                {browserKeeper.snap.status === 'running' ? 'Running' : 'Stopped'} · open console
+              </Link></p>
           </div>
         </Card>
 

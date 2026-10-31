@@ -1,222 +1,237 @@
 /**
- * KeeperProvider — src/admin/keeper/KeeperProvider.tsx
+ * Owns the one KeeperEngine for the admin console. Mounted above the admin
+ * routes, so switching tabs never stops a running keeper (closing the tab does).
  *
- * Context that owns ONE KeeperEngine instance, mounted in AdminApp above the
- * routes so navigating between admin tabs does NOT stop the keeper.
- *
- * Two wallet modes:
- *   A) "Browser keeper wallet" — key decrypted from localStorage, held in
- *      memory while unlocked. Engine sends via a viem WalletClient built from
- *      that key (unattended auto-run possible).
- *   B) "Connected wallet" — uses wagmi's connected wallet. Every tx needs a
- *      wallet confirmation, so only "Run once" is available (Start/auto-run
- *      disabled).
- *
- * Exposes state + actions: start, stop, runOnce, updateSettings, wallet
- * actions (create/import/unlock/lock/fund/withdraw/export/forget).
- * Persists settings (not keys) and the last 200 log entries in localStorage.
+ * Keeper wallet modes:
+ *   browser   — encrypted key in this browser (wallet.ts); signs locally, can auto-run.
+ *   connected — the wagmi wallet; every tx needs a confirmation, so Run once only.
  */
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { useAccount, usePublicClient, useWalletClient } from 'wagmi'
-import { privateKeyToAccount, type Address } from 'viem/accounts'
-import { type Hex, createWalletClient, http, type WalletClient, type PublicClient, type Abi } from 'viem'
-import { arc, arcTestnet } from 'viem/chains'
-
-import { KeeperEngine, DEFAULT_SETTINGS, KeeperSettings, KeeperEvent, SendTx, EngineState } from './engine'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useAccount, useBalance, usePublicClient, useWalletClient } from 'wagmi'
+import { createWalletClient, parseUnits, type Hex, type PublicClient } from 'viem'
+import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts'
+import { activeChain, arcTransport } from '../../config'
+import { ARC_CHAIN_ID } from '../../lib/steadfi'
+import { KeeperEngine, DEFAULT_SETTINGS, type KeeperSettings, type KeeperSigner, type KeeperSnapshot, type LogEntry } from './engine'
 import {
-  WalletRef, encryptWallet, decryptWallet, getStoredWallet, clearStoredWallet, generatePrivateKey,
+  clearStoredWallet, decryptStoredWallet, loadStoredWallet, normalizePrivateKey, saveNewWallet, type StoredWallet,
 } from './wallet'
-import { toast } from 'sonner'
 
-const STORAGE_SETTINGS = 'steadfi.keeper.settings.v1'
-const STORAGE_LOGS = 'steadfi.keeper.logs.v1'
-const MAX_LOGS = 200
+const SETTINGS_KEY = `steadfi.keeper.settings.v2.${ARC_CHAIN_ID}`
+const LOGS_KEY = `steadfi.keeper.logs.v2.${ARC_CHAIN_ID}`
+const MODE_KEY = `steadfi.keeper.mode.v2.${ARC_CHAIN_ID}`
+/** Native USDC has 18 decimals but only 6 are meaningful; transfers stay on that grid. */
+const NATIVE_GRID = 10n ** 12n
+
+export type WalletMode = 'browser' | 'connected'
 
 interface KeeperContextValue {
-  state: EngineState
-  settings: KeeperSettings
-  events: KeeperEvent[]
-  start: () => Promise<void>
+  snap: KeeperSnapshot
+  start: () => void
   stop: () => void
-  runOnce: () => Promise<void>
-  updateSettings: (patch: Partial<KeeperSettings>) => void
-  wallet: WalletRef
+  runOnce: () => void
+  updateSettings: (p: Partial<KeeperSettings>) => void
+  clearLogs: () => void
+
+  mode: WalletMode
+  setMode: (m: WalletMode) => void
+  stored: StoredWallet | null
+  unlocked: boolean
+  /** Address that signs keeper txs in the current mode (null when locked / not connected). */
+  keeperAddress: `0x${string}` | null
+  balanceUsdc: number | null
+  refetchBalance: () => void
+
   createWallet: (passphrase: string) => Promise<void>
-  importWallet: (privateKey: Hex, passphrase: string) => Promise<void>
-  unlockWallet: (passphrase: string) => Promise<void>
-  lockWallet: () => void
-  fundWallet: (amountUsdc: number) => Promise<void>
-  withdrawWallet: () => Promise<void>
-  exportWallet: (passphrase: string) => Promise<Hex | null>
-  forgetWallet: () => Promise<void>
-  setConnectedWallet: (address: Address | null) => void
+  importWallet: (privateKey: string, passphrase: string) => Promise<void>
+  unlock: (passphrase: string) => Promise<void>
+  lock: () => void
+  exportKey: (passphrase: string) => Promise<Hex>
+  forget: () => void
+  fund: (amountUsdc: string) => Promise<Hex>
+  withdrawAll: () => Promise<Hex>
 }
 
 const KeeperContext = createContext<KeeperContextValue | null>(null)
 
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeJson(key: string, value: unknown) {
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* convenience only */ }
+}
+
+function loadLogs(): LogEntry[] {
+  try {
+    const raw = localStorage.getItem(LOGS_KEY)
+    return raw ? JSON.parse(raw) as LogEntry[] : []
+  } catch {
+    return []
+  }
+}
+
 export function KeeperProvider({ children }: { children: ReactNode }) {
+  const publicClient = usePublicClient({ chainId: ARC_CHAIN_ID }) as PublicClient | undefined
   const { address: connectedAddress } = useAccount()
-  const publicClient = usePublicClient()
-  const { data: wagmiWalletClient } = useWalletClient()
+  const { data: walletClient } = useWalletClient({ chainId: ARC_CHAIN_ID })
 
-  const engineRef = useRef<KeeperEngine | null>(null)
-  const [wallet, setWallet] = useState<WalletRef>({
-    mode: 'connected',
-    address: connectedAddress ?? null,
-    unlocked: true,
-    balanceUsdc: null,
-    error: null,
-  })
-  const [events, setEvents] = useState<KeeperEvent[]>(loadLogs())
-  const [settings, setSettingsState] = useState<KeeperSettings>(() => loadSettings())
-  const signerKeyRef = useRef<Hex | null>(null)
+  const [engine] = useState(() => new KeeperEngine(readJson(SETTINGS_KEY, DEFAULT_SETTINGS), loadLogs()))
+  const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot)
 
-  const engine = engineRef.current ?? new KeeperEngine(settings)
-  engineRef.current = engine
-
-  // Persist logs + toasts
-  const logRef = useRef<(ev: KeeperEvent) => void>((ev) => {
-    setEvents(prev => {
-      const next = [ev, ...prev].slice(0, MAX_LOGS)
-      try { localStorage.setItem(STORAGE_LOGS, JSON.stringify(next)) } catch { /* noop */ }
-      return next
-    })
-    if (ev.type === 'error') toast.error(ev.message)
-    else if (ev.type === 'warning') toast.warning(ev.message)
-  })
-  engine.on(logRef.current)
-
-  // Sync settings
-  useEffect(() => {
-    engine.updateSettings(settings)
-    try { localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings)) } catch { /* noop */ }
-  }, [settings, engine])
-
-  // Re-wire sendTx when wallet mode / connected client changes
-  useEffect(() => {
-    const account = wallet.mode === 'connected' ? connectedAddress : wallet.address
-    if (wallet.mode === 'browser' && wallet.unlocked && signerKeyRef.current && publicClient) {
-      engine.setSendTx(makeSendTxFromKey(signerKeyRef.current, publicClient))
-    } else if (wallet.mode === 'connected' && wagmiWalletClient && publicClient) {
-      engine.setSendTx(makeSendTx(wagmiWalletClient, publicClient))
-    } else {
-      engine.setSendTx(null)
-    }
-    engine.setWalletAccount(account ?? null)
-  }, [wallet.mode, wallet.unlocked, signerKeyRef.current, connectedAddress, wagmiWalletClient, publicClient, engine])
-
-  // ── Wallet actions ────────────────────────────────────────────────────
-
-  const createWallet = async (passphrase: string) => {
-    const key = generatePrivateKey()
-    const stored = await encryptWallet(key, passphrase)
-    signerKeyRef.current = key
-    setWallet({
-      mode: 'browser',
-      address: stored.address as Address,
-      unlocked: true,
-      balanceUsdc: null,
-      error: null,
-    })
-    if (publicClient) engine.setSendTx(makeSendTxFromKey(key, publicClient))
-    toast.success('Keeper wallet created')
-  }
-
-  const importWallet = async (privateKey: Hex, passphrase: string) => {
-    const stored = await encryptWallet(privateKey, passphrase)
-    signerKeyRef.current = privateKey
-    setWallet({
-      mode: 'browser',
-      address: stored.address as Address,
-      unlocked: true,
-      balanceUsdc: null,
-      error: null,
-    })
-    if (publicClient) engine.setSendTx(makeSendTxFromKey(privateKey, publicClient))
-    toast.success('Keeper wallet imported')
-  }
-
-  const unlockWallet = async (passphrase: string) => {
-    const stored = getStoredWallet()
-    if (!stored) throw new Error('No stored wallet')
-    const key = await decryptWallet(stored, passphrase)
-    signerKeyRef.current = key
-    setWallet(w => ({ ...w, unlocked: true, address: stored.address as Address }))
-    if (publicClient) {
-      engine.setSendTx(makeSendTxFromKey(key, publicClient))
-      engine.setWalletAccount(stored.address as Address)
-    }
-    toast.success('Keeper wallet unlocked')
-  }
-
-  const lockWallet = () => {
-    signerKeyRef.current = null
-    setWallet(w => ({ ...w, unlocked: false }))
-    engine.setSendTx(null)
-    engine.setWalletAccount(null)
-  }
-
-  const fundWallet = async (amountUsdc: number) => {
-    toast.info('Fund: send USDC to the keeper address from your connected wallet')
-  }
-
-  const withdrawWallet = async () => {
-    toast.info('Withdraw: use the connected wallet to pull keeper funds back')
-  }
-
-  const exportWallet = async (passphrase: string): Promise<Hex | null> => {
-    const stored = getStoredWallet()
-    if (!stored) return null
+  const [stored, setStored] = useState<StoredWallet | null>(() => loadStoredWallet())
+  const [mode, setModeState] = useState<WalletMode>(() => {
     try {
-      return await decryptWallet(stored, passphrase)
-    } catch {
-      return null
+      const m = localStorage.getItem(MODE_KEY)
+      if (m === 'browser' || m === 'connected') return m
+    } catch { /* default below */ }
+    return 'browser'
+  })
+  const accountRef = useRef<PrivateKeyAccount | null>(null)
+  const [unlocked, setUnlocked] = useState(false)
+
+  const keeperAddress = mode === 'browser'
+    ? (unlocked ? accountRef.current?.address ?? null : stored?.address ?? null)
+    : connectedAddress ?? null
+
+  const balance = useBalance({
+    address: keeperAddress ?? undefined,
+    chainId: ARC_CHAIN_ID,
+    query: { enabled: !!keeperAddress, refetchInterval: 15_000 },
+  })
+  const balanceUsdc = balance.data ? Number(balance.data.value) / 1e18 : null
+
+  useEffect(() => { if (publicClient) engine.setClient(publicClient) }, [engine, publicClient])
+
+  // Signer for the active mode.
+  useEffect(() => {
+    let signer: KeeperSigner | null = null
+    const account = accountRef.current
+    if (mode === 'browser' && unlocked && account) {
+      const wc = createWalletClient({ account, chain: activeChain, transport: arcTransport })
+      signer = {
+        address: account.address,
+        canAutoRun: true,
+        sendCall: call => wc.writeContract({ ...call, account, chain: activeChain } as never),
+      }
+    } else if (mode === 'connected' && walletClient && connectedAddress) {
+      signer = {
+        address: connectedAddress,
+        canAutoRun: false,
+        sendCall: call => walletClient.writeContract({ ...call, account: walletClient.account, chain: activeChain } as never),
+      }
     }
-  }
+    engine.setSigner(signer)
+  }, [engine, mode, unlocked, walletClient, connectedAddress])
 
-  const forgetWallet = async () => {
-    clearStoredWallet()
-    signerKeyRef.current = null
-    setWallet({ mode: 'connected', address: connectedAddress ?? null, unlocked: true, balanceUsdc: null, error: null })
-    lockWallet()
-    toast.success('Keeper wallet forgotten')
-  }
+  useEffect(() => writeJson(SETTINGS_KEY, snap.settings), [snap.settings])
+  useEffect(() => writeJson(LOGS_KEY, snap.logs), [snap.logs])
 
-  const setConnectedWallet = (address: Address | null) => {
-    setWallet(w => ({ ...w, address, mode: 'connected', unlocked: true }))
-    engine.setWalletAccount(address)
-    if (wagmiWalletClient && publicClient) {
-      engine.setSendTx(makeSendTx(wagmiWalletClient, publicClient))
-    }
-  }
+  // Keep the price table live while the keeper is idle.
+  useEffect(() => {
+    if (!publicClient) return
+    void engine.refresh()
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible' && engine.getSnapshot().status === 'idle') void engine.refresh()
+    }, 20_000)
+    return () => clearInterval(t)
+  }, [engine, publicClient])
 
-  const start = async () => {
-    await engine.start()
-  }
+  // Closing the tab stops the keeper: warn first.
+  useEffect(() => {
+    if (snap.status !== 'running') return
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onUnload)
+    return () => window.removeEventListener('beforeunload', onUnload)
+  }, [snap.status])
 
-  const stop = () => {
+  const setMode = useCallback((m: WalletMode) => {
     engine.stop()
-  }
+    setModeState(m)
+    try { localStorage.setItem(MODE_KEY, m) } catch { /* convenience only */ }
+  }, [engine])
 
-  const runOnce = async () => {
-    await engine.runOnce()
-  }
+  const adopt = useCallback((account: PrivateKeyAccount) => {
+    accountRef.current = account
+    setStored(loadStoredWallet())
+    setUnlocked(true)
+    setModeState('browser')
+    try { localStorage.setItem(MODE_KEY, 'browser') } catch { /* convenience only */ }
+  }, [])
 
-  const updateSettings = (patch: Partial<KeeperSettings>) => {
-    setSettingsState(s => ({ ...s, ...patch }))
-  }
+  const lock = useCallback(() => {
+    engine.stop()
+    accountRef.current = null
+    setUnlocked(false)
+  }, [engine])
 
-  const value: KeeperContextValue = {
-    state: engine.getState(),
-    settings,
-    events,
-    start, stop, runOnce, updateSettings,
-    wallet,
-    createWallet, importWallet, unlockWallet, lockWallet,
-    fundWallet, withdrawWallet, exportWallet, forgetWallet,
-    setConnectedWallet,
-  }
+  const value = useMemo<KeeperContextValue>(() => ({
+    snap,
+    start: () => void engine.start(),
+    stop: () => engine.stop(),
+    runOnce: () => void engine.runOnce(),
+    updateSettings: p => engine.updateSettings(p),
+    clearLogs: () => engine.clearLogs(),
+
+    mode, setMode, stored, unlocked, keeperAddress, balanceUsdc,
+    refetchBalance: () => void balance.refetch(),
+
+    createWallet: async passphrase => adopt(await saveNewWallet(passphrase)),
+    importWallet: async (key, passphrase) => adopt(await saveNewWallet(passphrase, normalizePrivateKey(key))),
+    unlock: async passphrase => {
+      if (!stored) throw new Error('No keeper wallet in this browser')
+      adopt(privateKeyToAccount(await decryptStoredWallet(stored, passphrase)))
+    },
+    lock,
+    exportKey: async passphrase => {
+      if (!stored) throw new Error('No keeper wallet in this browser')
+      return decryptStoredWallet(stored, passphrase)
+    },
+    forget: () => {
+      lock()
+      clearStoredWallet()
+      setStored(null)
+    },
+    fund: async amount => {
+      if (!walletClient || !connectedAddress) throw new Error('Connect a wallet to fund the keeper')
+      if (!stored) throw new Error('Create a keeper wallet first')
+      if (!/^\d*\.?\d{0,6}$/.test(amount.trim()) || Number(amount) <= 0) throw new Error('Enter a USDC amount (up to 6 decimals)')
+      const hash = await walletClient.sendTransaction({
+        account: walletClient.account, chain: activeChain, to: stored.address, value: parseUnits(amount.trim(), 18),
+      })
+      await publicClient?.waitForTransactionReceipt({ hash })
+      void balance.refetch()
+      return hash
+    },
+    withdrawAll: async () => {
+      const account = accountRef.current
+      if (!account || !publicClient) throw new Error('Unlock the keeper wallet first')
+      if (!connectedAddress) throw new Error('Connect the wallet to send the funds to')
+      engine.stop()
+      const [bal, block, gas] = await Promise.all([
+        publicClient.getBalance({ address: account.address }),
+        publicClient.getBlock(),
+        publicClient.estimateGas({ account: account.address, to: connectedAddress, value: 1n }),
+      ])
+      const maxFeePerGas = (block.baseFeePerGas ?? 20n * 10n ** 9n) * 2n
+      const gasLimit = gas * 12n / 10n
+      const sendable = (bal - gasLimit * maxFeePerGas) / NATIVE_GRID * NATIVE_GRID
+      if (sendable <= 0n) throw new Error('Balance is too small to cover the transfer gas')
+      const wc = createWalletClient({ account, chain: activeChain, transport: arcTransport })
+      const hash = await wc.sendTransaction({
+        to: connectedAddress, value: sendable, gas: gasLimit, maxFeePerGas, maxPriorityFeePerGas: 0n,
+      })
+      await publicClient.waitForTransactionReceipt({ hash })
+      void balance.refetch()
+      return hash
+    },
+  }), [snap, engine, mode, setMode, stored, unlocked, keeperAddress, balanceUsdc, balance, adopt, lock, walletClient, connectedAddress, publicClient])
 
   return <KeeperContext.Provider value={value}>{children}</KeeperContext.Provider>
 }
@@ -225,55 +240,4 @@ export function useKeeper() {
   const ctx = useContext(KeeperContext)
   if (!ctx) throw new Error('useKeeper must be used within KeeperProvider')
   return ctx
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-function makeSendTx(walletClient: WalletClient, publicClient: PublicClient): SendTx {
-  return async ({ address, abi, functionName, args, value }) => {
-    const { request } = await publicClient.simulateContract({
-      address,
-      abi: abi as unknown as Abi,
-      functionName,
-      args,
-      account: walletClient.account?.address as `0x${string}`,
-      ...(value ? { value } : {}),
-    })
-    const hash = await walletClient.writeContract(request)
-    const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 })
-    const costUsdc = Number(receipt.gasUsed * BigInt(receipt.effectiveGasPrice ?? 0n)) / 1e18
-    return {
-      hash,
-      receipt: {
-        status: receipt.status === 'success' ? 1n : 0n,
-        gasUsed: receipt.gasUsed,
-        effectiveGasPrice: receipt.effectiveGasPrice ?? 0n,
-      },
-      costUsdc,
-    }
-  }
-}
-
-function makeSendTxFromKey(privateKey: Hex, publicClient: PublicClient): SendTx {
-  const account = privateKeyToAccount(privateKey)
-  const isMainnet = process.env.VITE_NETWORK !== 'testnet'
-  const chain = isMainnet ? arc : arcTestnet
-  const walletClient = createWalletClient({ chain, account, transport: http() })
-  return makeSendTx(walletClient, publicClient)
-}
-
-function loadSettings(): KeeperSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_SETTINGS)
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
-  } catch { /* noop */ }
-  return { ...DEFAULT_SETTINGS }
-}
-
-function loadLogs(): KeeperEvent[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_LOGS)
-    if (raw) return JSON.parse(raw) as KeeperEvent[]
-  } catch { /* noop */ }
-  return []
 }

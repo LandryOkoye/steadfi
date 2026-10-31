@@ -1,70 +1,55 @@
 /**
- * Keeper engine — src/admin/keeper/engine.ts
+ * Browser keeper engine (no React). Same job as the Node keeper in
+ * steadfi/keeper/src/keeper.ts: push Pyth Pro prices and liquidate HF < 1.
  *
- * Pure TypeScript (no React). Ports the Node keeper logic
- * (steadfi/keeper/src/keeper.ts) into a browser-runnable loop:
+ * One cycle:
+ *   1. Read every borrower's health factor (Borrow events, cached scan).
+ *   2. Price step: fetch the latest signed update from /api/pyth-latest and
+ *      push it only if it would refresh a feed that is stale or about to be
+ *      (gas saver), or a borrower is close to liquidation. Feeds that Pyth
+ *      itself hasn't updated (EUR/USD on weekends) never trigger a push.
+ *   3. Liquidation step: liquidate HF < 1 positions the keeper can afford.
  *
- *   - Price cycle: push fresh Pyth prices when feeds are near-stale or a
- *     borrower is near liquidation. Always simulates updatePrices first and
- *     only sends when the simulation succeeds (another keeper may have
- *     already pushed).
- *   - Liquidation cycle: scan Borrow events for unhealthy borrowers, pick
- *     the best debt/collateral pair, cap repayment at close factor, approve
- *     exactly what's needed, simulate liquidate, then send.
- *   - Safety rails: interval, session gas budget, min balance, dry-run,
- *     no concurrent cycles, no overlapping txs.
- *
- * The engine owns a viem PublicClient for reads. Write/send is injected
- * via setSendTx (implemented by KeeperProvider using either an in-memory
- * wallet client for browser keys or wagmi for the connected wallet).
- * It emits typed events consumed by the UI. It never touches localStorage
- * or React state directly.
+ * Every transaction is simulated first and checked against the session
+ * budget; a failed simulation sends nothing. Signing is injected (KeeperSigner)
+ * so the same engine runs with a browser key or the connected wallet.
  */
 
+import { parseAbi, parseAbiItem, type Abi, type Address, type Hex, type PublicClient } from 'viem'
 import {
-  createPublicClient,
-  http,
-  parseAbi,
-  parseAbiItem,
-  type Abi,
-  type PublicClient,
-  type Hex,
-  type Address,
-} from 'viem'
-import { arc, arcTestnet } from 'viem/chains'
-import {
-  CONTRACTS, TOKENS, POOL_DEPLOY_BLOCK,
-  LENDING_POOL_ABI, ORACLE_ABI, ERC20_ABI,
-  rayToHf, formatToken,
+  ARC_CHAIN_ID, CONTRACTS, TOKENS, POOL_DEPLOY_BLOCK,
+  LENDING_POOL_ABI, ORACLE_ABI, ERC20_ABI, rayToHf,
 } from '../../lib/steadfi'
 import { getLogsChunked } from '../../lib/logs'
 import { ORACLE_ADMIN_ABI } from '../abi'
-import { shortAddr } from './wallet'
-
-// ── Constants ─────────────────────────────────────────────────────────────
 
 const PYTH_LAZER: Address = '0xACeA761c27A909d4D3895128EBe6370FDE2dF481'
-
-const LAZER_ABI = parseAbi([
-  'function verification_fee() view returns (uint256)',
-])
-
+const LAZER_ABI = parseAbi(['function verification_fee() view returns (uint256)'])
 const BORROW_EVENT = parseAbiItem(
-  'event Borrow(address indexed user, address indexed asset, uint256 amount, uint256 debtShares)'
+  'event Borrow(address indexed user, address indexed asset, uint256 amount, uint256 debtShares)',
 )
 
-const BASE_FEE_FLOOR_GWEI = 20
+/** Pyth Pro feed id per collateral/borrow token that needs a price. USDC is fixed at $1. */
+const FEED_IDS: Record<string, number> = { cirBTC: 1, WETH: 2, EURC: 327 }
 
-// ── Settings ──────────────────────────────────────────────────────────────
+const NEAR_LIQUIDATION_HF = 1.1
+const MAX_LOGS = 200
+const GWEI = 10n ** 9n
+const BASE_FEE_FLOOR = 20n * GWEI
+/** USDC is the gas token: keep this much of it when repaying USDC debt. */
+const GAS_RESERVE_USDC = 0.01
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface KeeperSettings {
-  intervalSec: number        // min 30, default 60
-  refreshMarginSec: number   // default 120
-  gasSaver: boolean          // default ON
-  liquidationsOn: boolean    // default ON
-  sessionBudgetUsdc: number  // default 0.05
-  minBalanceUsdc: number     // default 0.01
-  dryRun: boolean            // default OFF
+  intervalSec: number
+  /** Push when a feed has at most this many seconds left before going stale. */
+  refreshMarginSec: number
+  gasSaver: boolean
+  liquidationsOn: boolean
+  sessionBudgetUsdc: number
+  minBalanceUsdc: number
+  dryRun: boolean
 }
 
 export const DEFAULT_SETTINGS: KeeperSettings = {
@@ -77,536 +62,540 @@ export const DEFAULT_SETTINGS: KeeperSettings = {
   dryRun: false,
 }
 
-// ── Events ────────────────────────────────────────────────────────────────
-
-export type KeeperEvent =
-  | { type: 'status'; status: 'stopped' | 'running' | 'run-once' | 'error' | 'auto-stopped'; detail?: string }
-  | { type: 'cycle'; phase: 'start' | 'end'; durationMs: number }
-  | { type: 'price'; asset: string; priceUsd: number | null; ageSec: number | null; fresh: boolean }
-  | { type: 'tx'; hash: string; action: string; costUsdc: number | null; status: 'sent' | 'confirmed' | 'failed' }
-  | { type: 'warning'; message: string }
-  | { type: 'error'; message: string }
-
-type Listener = (ev: KeeperEvent) => void
-
-// ── Injected send function ────────────────────────────────────────────────
-
-/** Simulates then sends a contract call. Returns { hash, receipt, costUsdc }. */
-export type SendTx = (args: {
+export interface KeeperCall {
   address: Address
   abi: Abi
   functionName: string
-  args: unknown[]
+  args: readonly unknown[]
   value?: bigint
-}) => Promise<{ hash: string; receipt: { status: bigint; gasUsed: bigint; effectiveGasPrice: bigint }; costUsdc: number }>
-
-// ── Engine ────────────────────────────────────────────────────────────────
-
-export interface EngineState {
-  status: 'stopped' | 'running' | 'run-once' | 'error' | 'auto-stopped'
-  runningSince: number | null
-  cycleCount: number
-  txCount: number
-  gasSpentUsdc: number
-  borrowersTracked: number
-  unhealthyCount: number
-  lastCycleMs: number | null
-  nextCycleMs: number | null
-  autoStoppedReason: string | null
+  gas: bigint
+  maxFeePerGas: bigint
+  maxPriorityFeePerGas: bigint
 }
 
+export interface KeeperSigner {
+  address: Address
+  /** False for the connected wallet: every tx needs a confirmation, so only "Run once". */
+  canAutoRun: boolean
+  sendCall(call: KeeperCall): Promise<Hex>
+}
+
+export interface PriceRow {
+  symbol: string
+  feedId: number
+  maxAge: number
+  onchainPrice: number | null
+  onchainPublishTime: number | null
+  pythPrice: number | null
+  pythPublishTime: number | null
+}
+
+export type LogLevel = 'info' | 'warn' | 'error' | 'tx'
+
+export interface LogEntry {
+  id: number
+  ts: number
+  level: LogLevel
+  message: string
+  txHash?: string
+  costUsdc?: number
+}
+
+export type KeeperStatus = 'idle' | 'running' | 'stopping'
+
+export interface KeeperSnapshot {
+  status: KeeperStatus
+  /** A cycle (scheduled or Run once) is in progress. */
+  busy: boolean
+  autoStopReason: string | null
+  startedAt: number | null
+  lastCycleAt: number | null
+  nextCycleAt: number | null
+  lastDecision: string | null
+  cycles: number
+  txs: number
+  spentUsdc: number
+  borrowers: number
+  nearLiquidation: number
+  liquidatable: number
+  prices: PriceRow[]
+  chainTime: number | null
+  settings: KeeperSettings
+  logs: LogEntry[]
+}
+
+interface PythLatest {
+  evmPayload: Hex
+  feeds: { feedId: number; price: string; exponent: number; publishTime: number }[]
+}
+
+class AutoStop extends Error {}
+
+function errMsg(err: unknown): string {
+  const e = err as { shortMessage?: string; message?: string }
+  return (e?.shortMessage ?? e?.message ?? String(err)).split('\n')[0]
+}
+
+const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
+
+// ── Engine ───────────────────────────────────────────────────────────────────
+
 export class KeeperEngine {
-  private settings: KeeperSettings
-  private publicClient: PublicClient
-  private walletAccountAddress: Address | null
-  private sendTx: SendTx | null
-  private listeners = new Set<Listener>()
+  private client: PublicClient | null = null
+  private signer: KeeperSigner | null = null
+  private snap: KeeperSnapshot
+  private listeners = new Set<() => void>()
+  private running = false
+  private oneShot = false
+  private wake: (() => void) | null = null
+  private releaseLock: (() => void) | null = null
+  private verificationFee: bigint | null = null
+  private warned = new Map<string, string>()
+  private logId = Date.now()
 
-  private status: EngineState['status'] = 'stopped'
-  private runningSince: number | null = null
-  private cycleCount = 0
-  private txCount = 0
-  private gasSpentUsdc = 0
-  private borrowersTracked = 0
-  private unhealthyCount = 0
-  private lastCycleMs: number | null = null
-  private nextCycleMs: number | null = null
-  private autoStoppedReason: string | null = null
-
-  private timer: ReturnType<typeof setInterval> | null = null
-  private cycleLock = false
-
-  private borrowersCache = new Map<Address, { block: bigint }>()
-  private borrowersScanDone = false
-
-  constructor(settings: Partial<KeeperSettings> = {}) {
-    this.settings = { ...DEFAULT_SETTINGS, ...settings }
-    const isMainnet = process.env.VITE_NETWORK !== 'testnet'
-    const chain = isMainnet ? arc : arcTestnet
-    const rpcUrls = (chain as { rpcUrls: { default: { http: readonly string[] } } }).rpcUrls.default.http
-    this.publicClient = createPublicClient({
-      chain,
-      transport: http(rpcUrls[0]),
-    })
-    this.walletAccountAddress = null
-    this.sendTx = null
-  }
-
-  // ── Public API ────────────────────────────────────────────────────────
-
-  on(listener: Listener) { this.listeners.add(listener) }
-  off(listener: Listener) { this.listeners.delete(listener) }
-  private emit(ev: KeeperEvent) { this.listeners.forEach(l => l(ev)) }
-
-  getState(): EngineState {
-    return {
-      status: this.status,
-      runningSince: this.runningSince,
-      cycleCount: this.cycleCount,
-      txCount: this.txCount,
-      gasSpentUsdc: this.gasSpentUsdc,
-      borrowersTracked: this.borrowersTracked,
-      unhealthyCount: this.unhealthyCount,
-      lastCycleMs: this.lastCycleMs,
-      nextCycleMs: this.nextCycleMs,
-      autoStoppedReason: this.autoStoppedReason,
+  constructor(settings: KeeperSettings, logs: LogEntry[]) {
+    this.snap = {
+      status: 'idle', busy: false, autoStopReason: null,
+      startedAt: null, lastCycleAt: null, nextCycleAt: null, lastDecision: null,
+      cycles: 0, txs: 0, spentUsdc: 0,
+      borrowers: 0, nearLiquidation: 0, liquidatable: 0,
+      prices: [], chainTime: null,
+      settings, logs,
     }
   }
 
-  getSettings(): KeeperSettings { return { ...this.settings } }
+  // ── Store (useSyncExternalStore) ──────────────────────────────────────────
 
-  updateSettings(patch: Partial<KeeperSettings>) {
-    this.settings = { ...this.settings, ...patch }
+  subscribe = (fn: () => void) => {
+    this.listeners.add(fn)
+    return () => { this.listeners.delete(fn) }
   }
 
-  setWalletAccount(address: Address | null) {
-    this.walletAccountAddress = address
+  getSnapshot = () => this.snap
+
+  private patch(p: Partial<KeeperSnapshot>) {
+    this.snap = { ...this.snap, ...p }
+    this.listeners.forEach(l => l())
   }
 
-  setSendTx(fn: SendTx | null) {
-    this.sendTx = fn
+  private log(level: LogLevel, message: string, extra: Partial<LogEntry> = {}) {
+    const entry: LogEntry = { id: ++this.logId, ts: Date.now(), level, message, ...extra }
+    this.patch({ logs: [entry, ...this.snap.logs].slice(0, MAX_LOGS) })
   }
+
+  /** Logs `message` only when it differs from the last one logged under `key`. */
+  private logOnce(key: string, level: LogLevel, message: string) {
+    if (this.warned.get(key) === message) return
+    this.warned.set(key, message)
+    this.log(level, message)
+  }
+
+  clearLogs() { this.patch({ logs: [] }) }
+
+  // ── Wiring ────────────────────────────────────────────────────────────────
+
+  setClient(client: PublicClient) { this.client = client }
+
+  setSigner(signer: KeeperSigner | null) {
+    const prev = this.signer
+    this.signer = signer
+    const changed = prev?.address !== signer?.address || prev?.canAutoRun !== signer?.canAutoRun
+    if (this.running && changed) this.stop('Keeper wallet changed or was locked')
+  }
+
+  updateSettings(p: Partial<KeeperSettings>) {
+    const s = { ...this.snap.settings, ...p }
+    s.intervalSec = Math.max(30, Math.round(s.intervalSec) || 60)
+    s.refreshMarginSec = Math.max(0, Math.round(s.refreshMarginSec) || 0)
+    s.sessionBudgetUsdc = Math.max(0, s.sessionBudgetUsdc || 0)
+    s.minBalanceUsdc = Math.max(0, s.minBalanceUsdc || 0)
+    this.patch({ settings: s })
+  }
+
+  // ── Control ───────────────────────────────────────────────────────────────
 
   async start() {
-    if (this.status === 'running' || this.status === 'run-once') return
-    if (!this.walletAccountAddress) {
-      this.status = 'error'
-      this.autoStoppedReason = 'No wallet account'
-      this.emit({ type: 'status', status: 'error', detail: this.autoStoppedReason })
-      return
+    if (this.running || this.snap.busy) return
+    const signer = this.signer
+    if (!signer) return this.log('error', 'Unlock or create a keeper wallet first')
+    if (!signer.canAutoRun) return this.log('error', 'Auto-run needs the browser keeper wallet; the connected wallet can only Run once')
+    if (!await this.acquireLock(signer.address)) {
+      return this.log('error', 'This keeper wallet is already running in another tab')
     }
-    if (!this.sendTx) {
-      this.status = 'error'
-      this.autoStoppedReason = 'No send function'
-      this.emit({ type: 'status', status: 'error', detail: this.autoStoppedReason })
-      return
-    }
-    this.status = 'running'
-    this.runningSince = Date.now()
-    this.autoStoppedReason = null
-    this.emit({ type: 'status', status: 'running' })
-    this.scheduleNext()
+    this.running = true
+    this.patch({
+      status: 'running', autoStopReason: null, startedAt: Date.now(),
+      cycles: 0, txs: 0, spentUsdc: 0,
+    })
+    this.log('info', `Started (every ${this.snap.settings.intervalSec}s, budget ${this.snap.settings.sessionBudgetUsdc} USDC)`)
+    void this.loop()
   }
 
-  stop() {
-    clearInterval(this.timer!)
-    this.timer = null
-    this.status = 'stopped'
-    this.runningSince = null
-    this.autoStoppedReason = null
-    this.emit({ type: 'status', status: 'stopped' })
+  stop(reason?: string) {
+    if (!this.running) return
+    this.running = false
+    this.wake?.()
+    this.patch({
+      status: this.snap.busy ? 'stopping' : 'idle',
+      nextCycleAt: null,
+      autoStopReason: reason ?? null,
+    })
+    this.log(reason ? 'warn' : 'info', reason ? `Stopped: ${reason}` : 'Stopped')
   }
 
   async runOnce() {
-    if (this.cycleLock) return
-    this.status = 'run-once'
-    this.runningSince = Date.now()
-    this.emit({ type: 'status', status: 'run-once' })
-    await this.runCycle()
-    this.status = 'stopped'
-    this.runningSince = null
-    this.emit({ type: 'status', status: 'stopped' })
-  }
-
-  private scheduleNext() {
-    clearInterval(this.timer!)
-    this.timer = setInterval(() => {
-      if (!this.cycleLock) void this.runCycle()
-    }, this.settings.intervalSec * 1000)
-    this.nextCycleMs = Date.now() + this.settings.intervalSec * 1000
-    this.emit({ type: 'cycle', phase: 'end', durationMs: 0 })
-  }
-
-  // ── Main cycle ────────────────────────────────────────────────────────
-
-  private async runCycle() {
-    if (this.cycleLock) return
-    this.cycleLock = true
+    if (this.running || this.snap.busy) return
+    const signer = this.signer
+    if (!signer) return this.log('error', 'Unlock or create a keeper wallet, or connect a wallet, first')
+    if (!await this.acquireLock(signer.address)) {
+      return this.log('error', 'This keeper wallet is already running in another tab')
+    }
+    this.oneShot = true
+    this.log('info', 'Run once')
     try {
-      if (this.settings.sessionBudgetUsdc > 0 && this.gasSpentUsdc >= this.settings.sessionBudgetUsdc) {
-        this.stop()
-        this.autoStoppedReason = `Session budget reached ($${this.settings.sessionBudgetUsdc} USDC)`
-        this.emit({ type: 'status', status: 'auto-stopped', detail: this.autoStoppedReason })
-        return
-      }
-
-      await this.priceCycle()
-
-      if (this.settings.liquidationsOn) {
-        await this.liquidationCycle()
-      }
-
-      this.cycleCount++
-      this.lastCycleMs = Date.now()
-      this.nextCycleMs = Date.now() + this.settings.intervalSec * 1000
-      this.emit({ type: 'cycle', phase: 'end', durationMs: 0 })
-    } catch (err: unknown) {
-      this.emit({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+      await this.safeCycle()
     } finally {
-      this.cycleLock = false
+      this.oneShot = false
+      this.releaseLock?.()
+      this.releaseLock = null
     }
   }
 
-  // ── Price cycle ───────────────────────────────────────────────────────
-
-  private async priceCycle() {
-    const assets = this.activeFeedAssets()
-    if (assets.length === 0) return
-
-    const reads = await Promise.all(assets.map(async (asset) => {
-      const cfg = await this.publicClient.readContract({
-        address: CONTRACTS.PythOracle,
-        abi: ORACLE_ADMIN_ABI,
-        functionName: 'assetConfigs',
-        args: [asset],
-      }) as unknown as { feedId: bigint; maxAge: bigint }
-      const stored = await this.publicClient.readContract({
-        address: CONTRACTS.PythOracle,
-        abi: ORACLE_ADMIN_ABI,
-        functionName: 'storedPrices',
-        args: [asset],
-      }) as unknown as { price: bigint; publishTime: bigint; set: boolean }
-      const now = Math.floor(Date.now() / 1000)
-      const ageSec = stored.set ? now - Number(stored.publishTime) : null
-      const fresh = stored.set && ageSec !== null && ageSec < Number(cfg.maxAge)
-      return { asset, cfg, stored, ageSec, fresh }
-    }))
-
-    const allFresh = reads.every(r => r.fresh)
-
-    if (allFresh && this.settings.gasSaver) {
-      const nearLiq = await this.anyBorrowerNearLiquidation()
-      if (!nearLiq) {
-        reads.forEach(r => this.emit({
-          type: 'price', asset: r.asset, priceUsd: null, ageSec: r.ageSec, fresh: true,
-        }))
-        return
-      }
-    }
-
-    const feedIds = reads.map(r => Number(r.cfg.feedId)).filter(Boolean)
-
-    let evm: Hex | null = null
+  /** Read-only refresh of prices and chain time for the UI while idle. */
+  async refresh() {
+    if (this.snap.busy || !this.client) return
     try {
-      const res = await fetch(`/api/pyth-latest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedIds }),
-      })
-      if (!res.ok) {
-        const txt = await res.text().catch(() => '')
-        throw new Error(txt || `HTTP ${res.status}`)
-      }
-      const payload = await res.json() as { evmPayload: string }
-      evm = payload.evmPayload as Hex
-    } catch (err: unknown) {
-      this.emit({ type: 'warning', message: `Pyth fetch failed: ${err instanceof Error ? err.message : String(err)}` })
-      return
-    }
-
-
-    const fee = await this.publicClient.readContract({
-      address: PYTH_LAZER,
-      abi: LAZER_ABI as unknown as Abi,
-      functionName: 'verification_fee',
-    }) as unknown as bigint
-
-    let simOk = false
-    try {
-      await this.publicClient.simulateContract({
-        address: CONTRACTS.PythOracle,
-        abi: ORACLE_ABI,
-        functionName: 'updatePrices',
-        args: [evm as `0x${string}`],
-        value: fee,
-        account: this.walletAccountAddress as `0x${string}`,
-      })
-      simOk = true
+      const block = await this.client.getBlock()
+      await this.readPrices(Number(block.timestamp))
     } catch {
-      this.emit({ type: 'warning', message: 'Price push skipped: nothing newer (simulation reverted)' })
+      // Display-only; the next refresh retries.
+    }
+  }
+
+  private async loop() {
+    while (this.running) {
+      await this.safeCycle()
+      if (!this.running) break
+      const ms = this.snap.settings.intervalSec * 1000
+      this.patch({ nextCycleAt: Date.now() + ms })
+      await new Promise<void>(resolve => {
+        const t = setTimeout(resolve, ms)
+        this.wake = () => { clearTimeout(t); resolve() }
+      })
+      this.wake = null
+    }
+    this.releaseLock?.()
+    this.releaseLock = null
+    this.patch({ status: 'idle', nextCycleAt: null })
+  }
+
+  private canSend() { return this.running || this.oneShot }
+
+  private async acquireLock(address: Address): Promise<boolean> {
+    const locks = (navigator as Navigator & { locks?: LockManager }).locks
+    if (!locks) return true
+    return new Promise<boolean>(resolve => {
+      void locks.request(`steadfi-keeper-${ARC_CHAIN_ID}-${address.toLowerCase()}`, { ifAvailable: true }, lock => {
+        if (!lock) { resolve(false); return }
+        resolve(true)
+        return new Promise<void>(release => { this.releaseLock = release })
+      })
+    })
+  }
+
+  // ── Cycle ─────────────────────────────────────────────────────────────────
+
+  private async safeCycle() {
+    this.patch({ busy: true })
+    try {
+      await this.cycle()
+      this.patch({ cycles: this.snap.cycles + 1, lastCycleAt: Date.now() })
+    } catch (err) {
+      if (err instanceof AutoStop) {
+        if (this.running) this.stop(err.message)
+        else this.log('warn', err.message)
+      } else {
+        this.log('error', `Cycle failed: ${errMsg(err)}`)
+      }
+    } finally {
+      this.patch({ busy: false, ...(this.snap.status === 'stopping' ? { status: 'idle' as const } : {}) })
+    }
+  }
+
+  private async cycle() {
+    const client = this.client
+    const signer = this.signer
+    if (!client) throw new Error('RPC client not ready')
+    if (!signer) throw new AutoStop('Keeper wallet unavailable')
+
+    const balance = await client.getBalance({ address: signer.address })
+    if (Number(balance) / 1e18 < this.snap.settings.minBalanceUsdc) {
+      throw new AutoStop(`Keeper balance is below the ${this.snap.settings.minBalanceUsdc} USDC minimum — fund it`)
+    }
+    this.checkBudget(0)
+
+    const health = await this.readHealth()
+    await this.priceStep(signer, health.near > 0)
+    if (this.snap.settings.liquidationsOn && health.candidates.length > 0) {
+      await this.liquidationStep(signer, health.candidates)
+    }
+  }
+
+  private checkBudget(nextCostUsdc: number) {
+    const { sessionBudgetUsdc } = this.snap.settings
+    if (sessionBudgetUsdc > 0 && this.snap.spentUsdc + nextCostUsdc > sessionBudgetUsdc) {
+      throw new AutoStop(`Session gas budget of ${sessionBudgetUsdc} USDC reached`)
+    }
+  }
+
+  // ── Health ────────────────────────────────────────────────────────────────
+
+  private async borrowersList(): Promise<Address[]> {
+    const logs = await getLogsChunked(this.client!, CONTRACTS.LendingPool, [BORROW_EVENT], POOL_DEPLOY_BLOCK, {
+      cacheKey: 'keeper-borrowers',
+    })
+    return [...new Set(logs.map(l => (l.args.user as Address).toLowerCase() as Address))]
+  }
+
+  private async healthFactor(user: Address): Promise<number | null> {
+    try {
+      const [hf] = await this.client!.readContract({
+        address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI, functionName: 'getHealthFactor', args: [user],
+      })
+      return rayToHf(hf)
+    } catch {
+      return null // reverts while a price is stale
+    }
+  }
+
+  /** Borrowers with HF < 1, or unknown HF (stale price), become liquidation candidates. */
+  private async readHealth() {
+    let borrowers: Address[] = []
+    try {
+      borrowers = await this.borrowersList()
+    } catch (err) {
+      this.logOnce('borrowers', 'warn', `Borrower scan failed, retrying next cycle: ${errMsg(err)}`)
+    }
+    let near = 0
+    let liquidatable = 0
+    const candidates: Address[] = []
+    for (const b of borrowers) {
+      const hf = await this.healthFactor(b)
+      if (hf === null || hf < 1) candidates.push(b)
+      if (hf !== null && hf < 1) liquidatable++
+      if (hf === null || hf < NEAR_LIQUIDATION_HF) near++
+    }
+    this.patch({ borrowers: borrowers.length, nearLiquidation: near, liquidatable })
+    return { near, candidates }
+  }
+
+  // ── Prices ────────────────────────────────────────────────────────────────
+
+  private feedAssets() {
+    return Object.values(TOKENS)
+      .filter(t => FEED_IDS[t.symbol] !== undefined)
+      .map(t => ({ symbol: t.symbol as string, asset: t.address as Address, feedId: FEED_IDS[t.symbol] }))
+  }
+
+  private async fetchPyth(feedIds: number[]): Promise<PythLatest> {
+    const res = await fetch('/api/pyth-latest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedIds }),
+    })
+    const body = await res.json().catch(() => ({})) as PythLatest & { error?: string }
+    if (!res.ok) throw new Error(body.error ?? `Price service HTTP ${res.status}`)
+    return body
+  }
+
+  /** Reads on-chain and Pyth prices; returns the rows plus the signed payload. */
+  private async readPrices(now: number) {
+    const client = this.client!
+    const assets = this.feedAssets()
+    const onchain = await Promise.all(assets.map(async a => {
+      const [[feedId, maxAge], [price, publishTime, set]] = await Promise.all([
+        client.readContract({ address: CONTRACTS.PythOracle, abi: ORACLE_ADMIN_ABI, functionName: 'assetConfigs', args: [a.asset] }),
+        client.readContract({ address: CONTRACTS.PythOracle, abi: ORACLE_ADMIN_ABI, functionName: 'storedPrices', args: [a.asset] }),
+      ])
+      return { ...a, configured: feedId !== 0, maxAge: Number(maxAge), price, publishTime: Number(publishTime), set }
+    }))
+    const configured = onchain.filter(a => a.configured)
+
+    let pyth: PythLatest | null = null
+    let pythError: string | null = null
+    if (configured.length > 0) {
+      try {
+        pyth = await this.fetchPyth(configured.map(a => a.feedId))
+      } catch (err) {
+        pythError = errMsg(err)
+      }
+    }
+
+    const rows: PriceRow[] = configured.map(a => {
+      const f = pyth?.feeds.find(x => x.feedId === a.feedId)
+      return {
+        symbol: a.symbol,
+        feedId: a.feedId,
+        maxAge: a.maxAge,
+        onchainPrice: a.set ? Number(a.price) / 1e18 : null,
+        onchainPublishTime: a.set ? a.publishTime : null,
+        pythPrice: f ? Number(f.price) * 10 ** f.exponent : null,
+        pythPublishTime: f ? f.publishTime : null,
+      }
+    })
+    this.patch({ prices: rows, chainTime: now })
+    return { rows, pyth, pythError }
+  }
+
+  private async priceStep(signer: KeeperSigner, borrowerAtRisk: boolean) {
+    const { gasSaver, refreshMarginSec } = this.snap.settings
+    const fees = await this.fees()
+    const { rows, pyth, pythError } = await this.readPrices(fees.now)
+    if (rows.length === 0) return
+    if (!pyth) {
+      this.logOnce('pyth', 'warn', `Could not fetch Pyth prices: ${pythError}`)
+      return
+    }
+    this.warned.delete('pyth')
+
+    // A feed is worth pushing only if Pyth has something newer and still fresh.
+    const refreshable = rows.filter(r =>
+      r.pythPublishTime !== null &&
+      r.pythPublishTime > (r.onchainPublishTime ?? 0) &&
+      fees.now - r.pythPublishTime < r.maxAge)
+    const due = refreshable.filter(r =>
+      !gasSaver || borrowerAtRisk || r.onchainPublishTime === null ||
+      r.maxAge - (fees.now - r.onchainPublishTime) <= refreshMarginSec)
+
+    const idle = rows.filter(r => r.pythPublishTime !== null && fees.now - r.pythPublishTime >= r.maxAge)
+    const idleNote = idle.length ? ` (${idle.map(r => r.symbol).join(', ')}: Pyth feed idle, market closed)` : ''
+
+    if (due.length === 0) {
+      this.patch({ lastDecision: `No price push needed${idleNote}` })
       return
     }
 
-    if (!simOk) return
-
-    if (this.settings.dryRun) {
-      this.emit({ type: 'warning', message: 'Dry-run: would push prices, not sending' })
-      return
-    }
-
-    if (!this.sendTx) return
-    const before = await this.publicClient.getBalance({ address: this.walletAccountAddress as `0x${string}` })
-    const gasParams = await this.gasParams()
-    const { request } = await this.publicClient.simulateContract({
+    this.verificationFee ??= await this.client!.readContract({
+      address: PYTH_LAZER, abi: LAZER_ABI, functionName: 'verification_fee',
+    })
+    const reason = borrowerAtRisk && gasSaver ? 'borrower near liquidation' : `${due.map(r => r.symbol).join(', ')} due`
+    const sent = await this.send(signer, `Price push (${reason})`, {
       address: CONTRACTS.PythOracle,
-      abi: ORACLE_ABI,
+      abi: ORACLE_ABI as Abi,
       functionName: 'updatePrices',
-      args: [evm as `0x${string}`],
-      value: fee,
-      account: this.walletAccountAddress as `0x${string}`,
-      ...gasParams,
-    })
-    const { hash, receipt, costUsdc } = await this.sendTx({
-      address: request.address as Address,
-      abi: request.abi as unknown as Abi,
-      functionName: request.functionName as string,
-      args: request.args as unknown[],
-      value: request.value,
-    })
-    this.emit({ type: 'tx', hash, action: 'updatePrices', costUsdc: null, status: 'sent' })
-    const after = await this.publicClient.getBalance({ address: this.walletAccountAddress as `0x${string}` })
-    const cost = Number(before - after) / 1e18
-    this.gasSpentUsdc += cost
-    this.txCount++
-    this.emit({ type: 'tx', hash, action: 'updatePrices', costUsdc: cost, status: receipt.status === 1n ? 'confirmed' : 'failed' })
-
-    reads.forEach(r => this.emit({
-      type: 'price', asset: r.asset, priceUsd: null, ageSec: r.ageSec, fresh: true,
-    }))
+      args: [pyth.evmPayload],
+      value: this.verificationFee,
+    }, fees)
+    this.patch({ lastDecision: sent ? `Pushed ${due.map(r => r.symbol).join(', ')}${idleNote}` : `Price push not sent${idleNote}` })
+    if (sent) await this.readPrices(Number((await this.client!.getBlock()).timestamp))
   }
 
-  // ── Liquidation cycle ─────────────────────────────────────────────────
+  // ── Liquidations ──────────────────────────────────────────────────────────
 
-  private async liquidationCycle() {
-    if (!this.borrowersScanDone) {
-      await this.scanBorrowers()
-    }
-    if (this.borrowersCache.size === 0) return
-
-    const borrowers = Array.from(this.borrowersCache.keys())
-    this.borrowersTracked = borrowers.length
-
-    for (const borrower of borrowers) {
-      const hf = await this.getHealthFactor(borrower)
+  private async liquidationStep(signer: KeeperSigner, candidates: Address[]) {
+    for (const borrower of candidates) {
+      if (!this.canSend()) return
+      if (borrower === signer.address.toLowerCase()) continue // the pool rejects self-liquidation
+      const hf = await this.healthFactor(borrower)
       if (hf === null || hf >= 1) continue
-      this.unhealthyCount++
-
-      const position = await this.bestPosition(borrower)
-      if (!position) continue
-
-      await this.liquidatePosition(position)
+      await this.liquidate(signer, borrower)
     }
   }
 
-  private async scanBorrowers() {
-    const fromBlock = POOL_DEPLOY_BLOCK
-    try {
-      const logs = await getLogsChunked(this.publicClient, CONTRACTS.LendingPool, [BORROW_EVENT], fromBlock, {
-        cacheKey: 'steadfi-keeper-borrowers',
-        isCancelled: () => false,
-      })
-      const users = new Set<Address>()
-      for (const log of logs) {
-        const args = log.args as { user?: Address } | undefined
-        if (args?.user) users.add(args.user)
-      }
-      users.forEach(u => this.borrowersCache.set(u, { block: 0n }))
-      this.borrowersScanDone = true
-    } catch (err: unknown) {
-      this.emit({ type: 'warning', message: `Borrower scan failed: ${err instanceof Error ? err.message : String(err)}` })
+  private async liquidate(signer: KeeperSigner, borrower: Address) {
+    const client = this.client!
+    const pool = CONTRACTS.LendingPool
+    const tokens = Object.values(TOKENS)
+    const debts = await Promise.all(tokens.filter(t => t.borrowEnabled).map(async t => {
+      const [amount, price] = await Promise.all([
+        client.readContract({ address: pool, abi: LENDING_POOL_ABI, functionName: 'getUserDebt', args: [borrower, t.address] }),
+        client.readContract({ address: CONTRACTS.PythOracle, abi: ORACLE_ABI, functionName: 'getPrice', args: [t.address] }),
+      ])
+      return { token: t, amount, usd: Number(amount) / 10 ** t.decimals * Number(price) / 1e18 }
+    }))
+    const colls = await Promise.all(tokens.filter(t => t.collateralEnabled).map(async t => {
+      const [amount, price] = await Promise.all([
+        client.readContract({ address: pool, abi: LENDING_POOL_ABI, functionName: 'getUserSupply', args: [borrower, t.address] }),
+        client.readContract({ address: CONTRACTS.PythOracle, abi: ORACLE_ABI, functionName: 'getPrice', args: [t.address] }),
+      ])
+      return { token: t, amount, usd: Number(amount) / 10 ** t.decimals * Number(price) / 1e18 }
+    }))
+    const debt = debts.filter(d => d.amount > 0n).sort((a, b) => b.usd - a.usd)[0]
+    const coll = colls.filter(c => c.amount > 0n).sort((a, b) => b.usd - a.usd)[0]
+    if (!debt || !coll) return
+
+    const sym = debt.token.symbol
+    const cfg = await client.readContract({ address: pool, abi: LENDING_POOL_ABI, functionName: 'getMarketConfig', args: [debt.token.address] })
+    const maxRepay = debt.amount * BigInt(cfg.closeFactor) / 10_000n
+    let balance = await client.readContract({ address: debt.token.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [signer.address] })
+    if (debt.token.symbol === 'USDC') {
+      const reserve = BigInt(Math.ceil((this.snap.settings.minBalanceUsdc + GAS_RESERVE_USDC) * 1e6))
+      balance = balance > reserve ? balance - reserve : 0n
     }
-  }
-
-  private async anyBorrowerNearLiquidation(): Promise<boolean> {
-    if (this.borrowersCache.size === 0) return false
-    for (const borrower of this.borrowersCache.keys()) {
-      const hf = await this.getHealthFactor(borrower)
-      if (hf !== null && hf < 1.1) return true
-    }
-    return false
-  }
-
-  private async getHealthFactor(borrower: Address): Promise<number | null> {
-    try {
-      const data = await this.publicClient.readContract({
-        address: CONTRACTS.LendingPool,
-        abi: LENDING_POOL_ABI,
-        functionName: 'getHealthFactor',
-        args: [borrower],
-      }) as { 0: bigint; 1: boolean }
-      return rayToHf(data[0])
-    } catch {
-      return null
-    }
-  }
-
-  private async bestPosition(borrower: Address) {
-    const borrowAssets: Address[] = Object.values(TOKENS)
-      .filter(t => t.borrowEnabled)
-      .map(t => t.address)
-    const collateralAssets: Address[] = Object.values(TOKENS)
-      .filter(t => t.collateralEnabled)
-      .map(t => t.address)
-
-    const [debtAmounts, supplyAmounts] = await Promise.all([
-      Promise.all(borrowAssets.map(a => this.publicClient.readContract({
-        address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI,
-        functionName: 'getUserDebt', args: [borrower, a],
-      }))),
-      Promise.all(collateralAssets.map(a => this.publicClient.readContract({
-        address: CONTRACTS.LendingPool, abi: LENDING_POOL_ABI,
-        functionName: 'getUserSupply', args: [borrower, a],
-      }))),
-    ])
-
-    const prices = await Promise.all([
-      ...borrowAssets.map(a => this.priceOf(a)),
-      ...collateralAssets.map(a => this.priceOf(a)),
-    ]) as bigint[]
-
-    let debtAsset: Address | null = null
-    let debtAmount = 0n
-    let bestDebtUsd = -1
-    borrowAssets.forEach((asset, i) => {
-      const usd = this.usdOf(debtAmounts[i], asset, prices[i])
-      if (debtAmounts[i] > 0n && usd > bestDebtUsd) {
-        bestDebtUsd = usd
-        debtAsset = asset
-        debtAmount = debtAmounts[i]
-      }
-    })
-
-    let collateralAsset: Address | null = null
-    let bestCollUsd = -1
-    collateralAssets.forEach((asset, i) => {
-      const usd = this.usdOf(supplyAmounts[i], asset, prices[borrowAssets.length + i])
-      if (supplyAmounts[i] > 0n && usd > bestCollUsd) {
-        bestCollUsd = usd
-        collateralAsset = asset
-      }
-    })
-
-    if (!debtAsset || !collateralAsset || debtAmount === 0n) return null
-    return { borrower, debtAsset, collateralAsset, debtAmount, debtUsd: bestDebtUsd }
-  }
-
-  private async priceOf(asset: Address): Promise<bigint> {
-    try {
-      return await this.publicClient.readContract({
-        address: CONTRACTS.PythOracle,
-        abi: ORACLE_ABI,
-        functionName: 'getPrice',
-        args: [asset],
-      }) as unknown as bigint
-    } catch {
-      return 0n
-    }
-  }
-
-  private usdOf(amount: bigint, asset: Address, price18: bigint): number {
-    const token = Object.values(TOKENS).find(t => t.address === asset)
-    const decimals = token?.decimals ?? 6
-    const usdc = Number(amount) / 10 ** decimals
-    return usdc * Number(price18) / 1e18
-  }
-
-  private async liquidatePosition(position: { borrower: Address; debtAsset: Address; collateralAsset: Address; debtAmount: bigint }) {
-    const { borrower, debtAsset, collateralAsset, debtAmount } = position
-    const account = this.walletAccountAddress as `0x${string}`
-
-    const [balance, allowance] = await Promise.all([
-      this.publicClient.readContract({
-        address: debtAsset, abi: ERC20_ABI, functionName: 'balanceOf', args: [account],
-      }) as unknown as bigint,
-      this.publicClient.readContract({
-        address: debtAsset, abi: ERC20_ABI, functionName: 'allowance', args: [account, CONTRACTS.LendingPool],
-      }) as unknown as bigint,
-    ])
-
-    const repayAmount = balance < debtAmount ? balance : debtAmount
-    if (repayAmount === 0n) {
-      this.emit({ type: 'warning', message: `${shortAddr(borrower)}: no ${debtAsset} balance to repay — skipping` })
+    const repay = balance < maxRepay ? balance : maxRepay
+    if (repay === 0n) {
+      this.logOnce(`liq-${borrower}`, 'warn',
+        `${short(borrower)} is liquidatable but the keeper has no spare ${sym} to repay (up to ${Number(maxRepay) / 10 ** debt.token.decimals} ${sym})`)
       return
     }
 
-    if (this.settings.dryRun) {
-      this.emit({ type: 'warning', message: `Dry-run: would liquidate ${shortAddr(borrower)}, repay ${formatToken(repayAmount, 6)}` })
-      return
+    const fees = await this.fees()
+    const allowance = await client.readContract({ address: debt.token.address, abi: ERC20_ABI, functionName: 'allowance', args: [signer.address, pool] })
+    if (allowance < repay) {
+      const ok = await this.send(signer, `Approve ${sym} for liquidation`, {
+        address: debt.token.address, abi: ERC20_ABI as Abi, functionName: 'approve', args: [pool, repay],
+      }, fees)
+      if (!ok) return
     }
-
-    if (!this.sendTx) return
-
-    if (allowance < repayAmount) {
-      const gasParams = await this.gasParams()
-      const { request } = await this.publicClient.simulateContract({
-        address: debtAsset,
-        abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [CONTRACTS.LendingPool, repayAmount] as [Address, bigint],
-        account: this.walletAccountAddress as `0x${string}`,
-        ...gasParams,
-      })
-      const { hash, receipt, costUsdc } = await this.sendTx({
-        address: request.address as Address,
-        abi: request.abi as unknown as Abi,
-        functionName: request.functionName as string,
-        args: request.args as unknown as unknown[],
-        value: request.value,
-      })
-      this.emit({ type: 'tx', hash, action: 'approve', costUsdc: null, status: 'sent' })
-      this.gasSpentUsdc += costUsdc
-      this.txCount++
-      this.emit({ type: 'tx', hash, action: 'approve', costUsdc, status: receipt.status === 1n ? 'confirmed' : 'failed' })
-    }
-
-    const gasParams = await this.gasParams()
-    const { request } = await this.publicClient.simulateContract({
-      address: CONTRACTS.LendingPool,
-      abi: LENDING_POOL_ABI,
-      functionName: 'liquidate',
-      args: [borrower, debtAsset, collateralAsset, repayAmount] as [Address, Address, Address, bigint],
-      account: this.walletAccountAddress as `0x${string}`,
-      ...gasParams,
-    })
-    const { hash, receipt, costUsdc } = await this.sendTx({
-      address: request.address as Address,
-      abi: request.abi as unknown as Abi,
-      functionName: request.functionName as string,
-        args: request.args as unknown as unknown[],
-      value: request.value,
-    })
-    this.emit({ type: 'tx', hash, action: 'liquidate', costUsdc: null, status: 'sent' })
-    this.gasSpentUsdc += costUsdc
-    this.txCount++
-    this.emit({ type: 'tx', hash, action: 'liquidate', costUsdc, status: receipt.status === 1n ? 'confirmed' : 'failed' })
+    const ok = await this.send(signer, `Liquidate ${short(borrower)} (repay ${Number(repay) / 10 ** debt.token.decimals} ${sym}, seize ${coll.token.symbol})`, {
+      address: pool, abi: LENDING_POOL_ABI as Abi, functionName: 'liquidate',
+      args: [borrower, debt.token.address, coll.token.address, repay],
+    }, fees)
+    if (ok) this.warned.delete(`liq-${borrower}`)
   }
 
-  private async gasParams() {
-    const block = await this.publicClient.getBlock()
-    const baseFee = block.baseFeePerGas ?? 0n
-    const floor = BigInt(BASE_FEE_FLOOR_GWEI) * 10n ** 9n
-    const maxFee = baseFee > floor ? baseFee + baseFee / 10n : floor * 2n
-    return { maxFeePerGas: maxFee, maxPriorityFeePerGas: 0n }
+  // ── Sending ───────────────────────────────────────────────────────────────
+
+  private async fees() {
+    const block = await this.client!.getBlock()
+    const base = block.baseFeePerGas && block.baseFeePerGas > BASE_FEE_FLOOR ? block.baseFeePerGas : BASE_FEE_FLOOR
+    return { base, maxFeePerGas: base * 2n, maxPriorityFeePerGas: 0n, now: Number(block.timestamp) }
   }
 
-  // ── Active feed assets (tokens with a Pyth feed on this network) ────────
-
-  private activeFeedAssets(): Address[] {
-    const known: { [feedId: number]: Address } = {
-      1: TOKENS.cirBTC?.address ?? '0x0',
-      2: TOKENS.WETH?.address ?? '0x0',
-      327: TOKENS.EURC?.address ?? '0x0',
+  /** Simulates, budget-checks, sends and waits for `call`. Returns true on a successful receipt. */
+  private async send(
+    signer: KeeperSigner,
+    label: string,
+    call: Omit<KeeperCall, 'gas' | 'maxFeePerGas' | 'maxPriorityFeePerGas'>,
+    fees: { base: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
+  ): Promise<boolean> {
+    const client = this.client!
+    let gas: bigint
+    try {
+      await client.simulateContract({ ...call, account: signer.address } as never)
+      gas = await client.estimateContractGas({ ...call, account: signer.address } as never)
+    } catch (err) {
+      this.logOnce(`sim-${label}`, 'warn', `${label} skipped — simulation failed: ${errMsg(err)}`)
+      return false
     }
-    return Object.values(known).filter(a => a !== '0x0')
+    this.warned.delete(`sim-${label}`)
+    gas = gas * 12n / 10n
+    const estCost = Number(gas * fees.base) / 1e18
+    this.checkBudget(estCost)
+
+    if (this.snap.settings.dryRun) {
+      this.log('info', `Dry run: would send ${label} (~${estCost.toFixed(4)} USDC)`)
+      return false
+    }
+    if (!this.canSend()) return false
+
+    const hash = await signer.sendCall({ ...call, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas })
+    this.log('tx', `${label} sent`, { txHash: hash })
+    const receipt = await client.waitForTransactionReceipt({ hash, timeout: 120_000 })
+    const cost = Number(receipt.gasUsed * receipt.effectiveGasPrice) / 1e18
+    this.patch({ spentUsdc: this.snap.spentUsdc + cost, txs: this.snap.txs + 1 })
+    const ok = receipt.status === 'success'
+    this.log(ok ? 'tx' : 'error', `${label} ${ok ? 'confirmed' : 'reverted'}`, { txHash: hash, costUsdc: cost })
+    return ok
   }
 }

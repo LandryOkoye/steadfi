@@ -1,336 +1,403 @@
 /**
- * Keeper page — src/admin/pages/Keeper.tsx
- *
- * Browser-based keeper control panel. Operators (and hackathon judges with
- * no admin role) can create/connect a keeper wallet, start/stop auto-run,
- * run one price cycle, and monitor live.
- *
- * Mounted inside KeeperProvider; all engine logic is in src/admin/keeper/.
- *
- * ⚠ Money safety: every action that sends a transaction costs real USDC gas
- * (Arc uses USDC as the gas token). On mainnet, "Run once" and auto-run
- * will spend funds. Always test on testnet first.
+ * Keeper console — run the price keeper / liquidator from this browser tab.
+ * Open to any connected wallet: keeper calls are permissionless and spend only
+ * the keeper wallet's gas. Engine and wallet logic live in src/admin/keeper/.
  */
 
-import { useEffect, useState, useRef } from 'react'
-import {
-  Robot, Play, Stop, Copy, ArrowRight, Key, Lock, Plus, Minus,
-  Trash, Warning, CheckCircle, Info,
-} from '@phosphor-icons/react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAccount } from 'wagmi'
-import { useKeeper } from '../keeper/KeeperProvider'
+import {
+  Robot, Play, Stop, ArrowClockwise, Copy, Key, LockSimple, LockSimpleOpen, Trash,
+  ArrowDown, ArrowUp, ArrowSquareOut, Warning, Info,
+} from '@phosphor-icons/react'
+import { toast } from 'sonner'
 import { Card, CardHeader, CardTitle } from '../../components/ui/Card'
 import Button from '../../components/ui/Button'
-import { Pill, shortAddr, fmtUsd } from '../components'
-import { addrUrl, TOKENS, ARC_CHAIN_ID } from '../../lib/steadfi'
-import { toast } from 'sonner'
+import { ConfirmButton, Field, KpiTile, Pill, inputCls, shortAddr } from '../components'
+import { IS_MAINNET, NETWORK_NAME, addrUrl, txUrl } from '../../lib/steadfi'
+import { useKeeper } from '../keeper/KeeperProvider'
+import { MIN_PASSPHRASE } from '../keeper/wallet'
+import type { KeeperSettings, LogEntry, PriceRow } from '../keeper/engine'
 
-const NETWORK_LABEL = ARC_CHAIN_ID === 5042 ? 'Arc Mainnet' : 'Arc Testnet'
-const NETWORK_TONE = ARC_CHAIN_ID === 5042 ? 'danger' : 'warning'
-
-function msToSecs(ms: number | null): string {
-  if (ms === null) return '—'
-  const s = Math.max(0, Math.round(ms / 1000))
-  return `${s}s`
+function useNow(ms = 1000) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms)
+    return () => clearInterval(t)
+  }, [ms])
+  return now
 }
 
-type KeeperEvent = {
-  type: string
-  asset?: string
-  priceUsd?: number | null
-  ageSec?: number | null
-  fresh?: boolean
-  hash?: string
-  action?: string
-  costUsdc?: number | null
-  status?: 'sent' | 'confirmed' | 'failed'
-  message?: string
+function errMsg(e: unknown) {
+  const err = e as { shortMessage?: string; message?: string }
+  return (err?.shortMessage ?? err?.message ?? String(e)).split('\n')[0]
 }
+
+function ago(sec: number | null) {
+  if (sec === null) return '—'
+  if (sec < 90) return `${Math.max(0, Math.round(sec))}s`
+  if (sec < 5400) return `${Math.round(sec / 60)}m`
+  return `${(sec / 3600).toFixed(1)}h`
+}
+
+const usdc = (n: number | null, frac = 4) => (n === null ? '—' : `${n.toFixed(frac)} USDC`)
 
 export default function Keeper() {
-  const { address: connectedAddress } = useAccount()
-  const {
-    state, settings, events, wallet,
-    start, stop, runOnce, updateSettings,
-    createWallet, importWallet, unlockWallet, lockWallet,
-    fundWallet, withdrawWallet, exportWallet, forgetWallet,
-    setConnectedWallet,
-  } = useKeeper()
+  const k = useKeeper()
+  const { snap } = k
+  const now = useNow()
+  const running = snap.status !== 'idle'
+  const canRun = !!k.keeperAddress && (k.mode === 'connected' || k.unlocked)
 
-  const [walletMode, setWalletMode] = useState<'browser' | 'connected'>(wallet.mode)
-  const [passphrase, setPassphrase] = useState('')
-  const [importKey, setImportKey] = useState('')
-  const [fundAmount, setFundAmount] = useState('0.05')
-  const [showExportConfirm, setShowExportConfirm] = useState(false)
-  const [exportPassphrase, setExportPassphrase] = useState('')
-  const [autoStopBudget, setAutoStopBudget] = useState(String(settings.sessionBudgetUsdc))
-  const [showForgetConfirm, setShowForgetConfirm] = useState(false)
-  const [forgetPassphrase, setForgetPassphrase] = useState('')
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Status pill
-  const statusLabel = (() => {
-    switch (state.status) {
-      case 'running': return 'Running'
-      case 'run-once': return 'Run once'
-      case 'error': return 'Error'
-      case 'auto-stopped': return `Auto-stopped${state.autoStoppedReason ? `: ${state.autoStoppedReason}` : ''}`
-      default: return 'Stopped'
-    }
-  })()
-
-  // Poll balance while running
-  useEffect(() => {
-    if (state.status === 'running' || state.status === 'run-once') {
-      timerRef.current = setInterval(() => {
-        // noop: balance is refreshed by engine events
-      }, 15_000)
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current)
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [state.status])
-
-  // ── Guardrails ──────────────────────────────────────────────────────
-
-  const isMainnet = ARC_CHAIN_ID === 5042
-
-  // ── Render ─────────────────────────────────────────────────────────
+  const status = snap.status === 'running'
+    ? <Pill tone="success">{snap.busy ? 'Running · working' : 'Running'}</Pill>
+    : snap.status === 'stopping'
+      ? <Pill tone="warning">Stopping after this step</Pill>
+      : snap.busy
+        ? <Pill tone="warning">Running once</Pill>
+        : snap.autoStopReason
+          ? <Pill tone="danger">Auto-stopped</Pill>
+          : <Pill tone="muted">Stopped</Pill>
 
   return (
     <div className="space-y-5">
-      {/* ── Amber admin header banner ── */}
-      <div className="border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_8%,transparent)] rounded-lg p-4">
-        <div className="flex items-start gap-3">
-          <Robot size={16} className="text-[var(--color-warning)] mt-0.5" aria-hidden="true" />
-          <div>
-            <h2 className="text-sm font-semibold text-[var(--color-foreground)]">Keeper — price keeper &amp; liquidator</h2>
-            <p className="text-[10px] text-[var(--color-muted-foreground)]">
-              Browser-based keeper. Runs Pyth price pushes and liquidates unhealthy borrowers.
-              {isMainnet
-                ? '⚠ On Arc MAINNET this spends real USDC gas. Test on testnet first.'
-                : 'Running on Arc Testnet — test tokens only.'}
-            </p>
-          </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
+            <Robot size={22} aria-hidden="true" /> Keeper {status}
+          </h1>
+          <p className="mt-1 max-w-2xl text-sm text-[var(--color-muted-foreground)]">
+            Pushes Pyth Pro prices on-chain and liquidates unhealthy loans, from this tab.
+            Anyone can run it — these calls are permissionless and only spend the keeper wallet's gas.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {snap.status === 'running'
+            ? <Button variant="danger" onClick={k.stop}><Stop size={15} weight="fill" aria-hidden="true" /> Stop</Button>
+            : <Button
+                variant="brand"
+                onClick={k.start}
+                disabled={!canRun || k.mode !== 'browser' || snap.busy || snap.status === 'stopping'}
+                title={k.mode !== 'browser' ? 'Auto-run needs the browser keeper wallet' : undefined}
+              ><Play size={15} weight="fill" aria-hidden="true" /> Start</Button>}
+          <Button variant="secondary" onClick={k.runOnce} disabled={!canRun || running || snap.busy} loading={snap.busy && !running}>
+            <ArrowClockwise size={15} aria-hidden="true" /> Run once
+          </Button>
         </div>
       </div>
 
-      {/* ── Header ── */}
-      <Card>
-        <CardHeader><CardTitle>Control</CardTitle></CardHeader>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Robot size={18} aria-hidden="true" />
-              <span className="font-semibold">Keeper status</span>
-              <span className={`ml-auto px-2 py-0.5 rounded text-[10px] font-medium ${
-                state.status === 'running' ? 'bg-[var(--color-success)]/10 text-[var(--color-success)] border border-[var(--color-success)]/20' :
-                state.status === 'error' || state.status === 'auto-stopped' ? 'bg-[var(--color-destructive)]/10 text-[var(--color-destructive)] border border-[var(--color-destructive)]/20' :
-                'bg-[var(--color-muted)]/10 text-[var(--color-muted-foreground)] border border-[var(--color-muted)]/20'
-              }`}>{statusLabel}</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-              <span className={`rounded bg-[color-mix(in_srgb,var(--color-${NETWORK_TONE})_15%,transparent)] px-2 py-0.5 text-[var(--color-${NETWORK_TONE})]`}>
-                {NETWORK_LABEL}
-              </span>
-            </div>
-          </div>
+      {IS_MAINNET && (
+        <Notice tone="warning">
+          {NETWORK_NAME} mainnet: every transaction spends real USDC gas (a price push is about 0.003 USDC).
+          The session budget below stops the keeper automatically.
+        </Notice>
+      )}
+      {snap.autoStopReason && snap.status === 'idle' && <Notice tone="danger">Auto-stopped: {snap.autoStopReason}</Notice>}
+      {running && <Notice tone="info">Keep this tab open — closing it stops the keeper. Switching admin tabs is fine.</Notice>}
 
-          <div className="flex flex-wrap gap-2">
-            {wallet.mode === 'browser' && wallet.unlocked && state.status !== 'running' ? (
-              <Button
-                onClick={start}
-                variant="primary"
-              >
-                <Play size={14} aria-hidden="true" /> Start auto-run
-              </Button>
-            ) : (
-              <Button onClick={stop} variant="danger" disabled={state.status === 'stopped'}>
-                <Stop size={14} aria-hidden="true" /> Stop
-              </Button>
-            )}
-            <Button
-              onClick={runOnce}
-              disabled={state.status === 'running' || !wallet.address || !wallet.unlocked}
-              variant={isMainnet ? 'danger' : 'primary'}
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+        <KpiTile
+          label="Gas this session"
+          value={snap.spentUsdc.toFixed(4)}
+          sub={snap.settings.sessionBudgetUsdc > 0 ? `of ${snap.settings.sessionBudgetUsdc} USDC budget` : 'no budget set'}
+          tone={snap.settings.sessionBudgetUsdc > 0 && snap.spentUsdc >= snap.settings.sessionBudgetUsdc * 0.8 ? 'warning' : undefined}
+        />
+        <KpiTile label="Transactions" value={snap.txs} sub={`${snap.cycles} cycles`} />
+        <KpiTile
+          label="Borrowers"
+          value={snap.borrowers}
+          sub={`${snap.nearLiquidation} near · ${snap.liquidatable} liquidatable`}
+          tone={snap.liquidatable > 0 ? 'danger' : snap.nearLiquidation > 0 ? 'warning' : undefined}
+        />
+        <KpiTile
+          label="Next cycle"
+          value={snap.busy ? 'now' : snap.nextCycleAt ? ago((snap.nextCycleAt - now) / 1000) : '—'}
+          sub={snap.lastCycleAt ? `last ${ago((now - snap.lastCycleAt) / 1000)} ago` : 'not run yet'}
+        />
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <WalletCard />
+        <PricesCard prices={snap.prices} chainTime={snap.chainTime} now={now} decision={snap.lastDecision} />
+      </div>
+
+      <SettingsCard settings={snap.settings} onChange={k.updateSettings} />
+      <LogCard logs={snap.logs} onClear={k.clearLogs} />
+      <HowTo />
+    </div>
+  )
+}
+
+// ── Wallet ───────────────────────────────────────────────────────────────────
+
+function WalletCard() {
+  const k = useKeeper()
+  const { isConnected } = useAccount()
+  const [busy, setBusy] = useState<string | null>(null)
+
+  async function act(key: string, fn: () => Promise<unknown>, ok?: string) {
+    setBusy(key)
+    try {
+      await fn()
+      if (ok) toast.success(ok)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Keeper wallet</CardTitle></CardHeader>
+      <div className="space-y-4">
+        <div className="inline-flex rounded-lg border border-[var(--color-border)] p-0.5" role="tablist">
+          {(['browser', 'connected'] as const).map(m => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={k.mode === m}
+              onClick={() => k.setMode(m)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-base cursor-pointer ${
+                k.mode === m ? 'bg-[var(--color-muted)] text-[var(--color-foreground)]' : 'text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]'}`}
             >
-              <Warning size={14} aria-hidden="true" /> Run once
-            </Button>
-            <span className="ml-auto text-[11px] text-[var(--color-muted-foreground)]">
-              Cycles: {state.cycleCount} · Tx: {state.txCount} · Gas spent: {fmtUsd(state.gasSpentUsdc)} USDC
-            </span>
-          </div>
-
-          {state.autoStoppedReason && (
-            <p className="text-[11px] text-[var(--color-destructive)]">{state.autoStoppedReason}</p>
-          )}
-
-          {/* Countdown */}
-          {state.nextCycleMs && state.status === 'running' && (
-            <p className="text-[11px] text-[var(--color-muted-foreground)]">
-              Next cycle in {msToSecs(state.nextCycleMs - Date.now())}
-            </p>
-          )}
-
-          {isMainnet && state.status !== 'stopped' && (
-            <p className="mt-2 text-[10px] text-[var(--color-destructive)]">
-              ⚠ Mainnet: every cycle spends USDC gas. Use budget guardrails below to cap spending.
-            </p>
-          )}
+              {m === 'browser' ? 'Browser keeper wallet' : 'Connected wallet'}
+            </button>
+          ))}
         </div>
-      </Card>
 
-      {/* ── Wallet card ── */}
-      <Card>
-        <CardHeader><CardTitle>Keeper wallet</CardTitle></CardHeader>
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col">
-              <span className="text-[10px] text-[var(--color-muted-foreground)]">Mode</span>
-              <div className="flex gap-1">
-                <Button
-                  variant={walletMode === 'browser' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setWalletMode('browser')}
-                >
-                  Browser wallet
-                </Button>
-                <Button
-                  variant={walletMode === 'connected' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => {
-                    setWalletMode('connected')
-                    setConnectedWallet(connectedAddress ?? null)
-                  }}
-                >
-                  Connected wallet
-                </Button>
-              </div>
-              {walletMode === 'connected' && (
-                <p className="mt-1 text-[11px] text-[var(--color-muted-foreground)]">
-                  Every tx needs your wallet confirmation — only Run once is available.
-                </p>
-              )}
-              {walletMode === 'browser' && (
-                <p className="mt-1 text-[10px] text-[var(--color-muted-foreground)]">
-                  Key is encrypted in this browser. Auto-run works while unlocked.
-                </p>
-              )}
-            </div>
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] text-[var(--color-muted-foreground)]">Address</span>
-              <div className="flex items-center gap-2 mono text-xs">
-                {wallet.address ? shortAddr(wallet.address) : '—'}
-                {wallet.address && (
-                  <Button size="sm" variant="ghost" onClick={() => {
-                    navigator.clipboard.writeText(wallet.address ?? '')
-                    toast.success('Address copied')
-                  }}>
-                    <Copy size={12} aria-hidden="true" />
-                  </Button>
-                )}
-              </div>
-              {wallet.address && (
-                <a href={addrUrl(wallet.address)} target="_blank" rel="noopener noreferrer" className="mt-1 text-[10px] text-[var(--color-primary)] hover:underline">
-                  View on explorer <ArrowRight size={10} aria-hidden="true" />
-                </a>
-              )}
-            </div>
-          </div>
-
-          {wallet.mode === 'browser' && (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] text-[var(--color-muted-foreground)]">Status</span>
-                <Pill tone={wallet.unlocked ? 'success' : 'danger'}>
-                  {wallet.unlocked ? 'Unlocked (key in memory)' : 'Locked'}
-                </Pill>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {wallet.unlocked ? (
-                  <>
-                    <Button onClick={lockWallet} size="sm" variant="secondary">
-                      <Lock size={13} aria-hidden="true" /> Lock
-                    </Button>
-                    <Button onClick={() => setShowExportConfirm(true)} size="sm" variant="secondary">
-                      <Key size={13} aria-hidden="true" /> Export key
-                    </Button>
-                  </>
-                ) : (
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      placeholder="Passphrase"
-                      value={passphrase}
-                      onChange={e => setPassphrase(e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm mono text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-                    />
-                    <Button onClick={() => unlockWallet(passphrase)} size="sm">
-                      <Lock size={13} aria-hidden="true" /> Unlock
-                    </Button>
-                  </div>
-                )}
-                <Button onClick={() => setShowForgetConfirm(true)} size="sm" variant="danger">
-                  <Trash size={13} aria-hidden="true" /> Forget wallet
-                </Button>
-              </div>
-              <div className="bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] border border-[color-mix(in_srgb,var(--color-warning)_25%,transparent)] rounded-lg p-2">
-                <p className="text-[10px] text-[var(--color-warning)]">
-                  ⚠ Hot wallet in this browser — keep only a small balance. Never share your passphrase.
-                </p>
-              </div>
-            </>
-          )}
-
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] text-[var(--color-muted-foreground)]">Gas balance</span>
-            <span className="mono text-xs">{wallet.balanceUsdc === null ? '—' : fmtUsd(wallet.balanceUsdc)} USDC</span>
-          </div>
-
-          <div className="flex gap-2">
-            <input
-              placeholder="USDC"
-              value={fundAmount}
-              onChange={e => setFundAmount(e.target.value)}
-              className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm mono text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
+        {k.mode === 'connected' ? (
+          <>
+            <p className="text-sm text-[var(--color-muted-foreground)]">
+              Uses the wallet connected at the top right. Each transaction needs your confirmation,
+              so only <strong>Run once</strong> is available. Use the browser keeper wallet for auto-run.
+            </p>
+            {k.keeperAddress ? <AddressRow address={k.keeperAddress} balance={k.balanceUsdc} /> : <p className="text-sm">Connect a wallet to continue.</p>}
+          </>
+        ) : !k.stored ? (
+          <CreateWallet busy={busy} act={act} />
+        ) : !k.unlocked ? (
+          <>
+            <AddressRow address={k.stored.address} balance={k.balanceUsdc} />
+            <PassphraseForm
+              label="Unlock"
+              icon={<LockSimpleOpen size={14} aria-hidden="true" />}
+              loading={busy === 'unlock'}
+              onSubmit={p => act('unlock', () => k.unlock(p), 'Keeper wallet unlocked')}
             />
-            <Button onClick={() => fundWallet(Number(fundAmount))} size="sm">
-              <Plus size={13} aria-hidden="true" /> Fund
-            </Button>
-            <Button onClick={withdrawWallet} size="sm" variant="secondary">
-              <Minus size={13} aria-hidden="true" /> Withdraw all
-            </Button>
-          </div>
-          <p className="text-[10px] text-[var(--color-muted-foreground)]">
-            Fund: send USDC from your connected wallet to the keeper address above.
-            Withdraw: sends keeper balance (minus gas reserve) back to your connected wallet.
-          </p>
-        </div>
-      </Card>
+            <ConfirmButton variant="secondary" onConfirm={k.forget}>
+              <Trash size={14} aria-hidden="true" /> Forget this wallet
+            </ConfirmButton>
+          </>
+        ) : (
+          <>
+            <AddressRow address={k.stored.address} balance={k.balanceUsdc} />
+            <FundRow
+              disabled={!isConnected}
+              loading={busy === 'fund'}
+              onFund={amount => act('fund', () => k.fund(amount), 'Keeper wallet funded')}
+            />
+            <div className="flex flex-wrap gap-2">
+              <ConfirmButton
+                variant="secondary"
+                disabled={!isConnected || !k.balanceUsdc}
+                loading={busy === 'withdraw'}
+                onConfirm={() => act('withdraw', k.withdrawAll, 'Funds sent back to your connected wallet')}
+              >
+                <ArrowUp size={14} aria-hidden="true" /> Withdraw all
+              </ConfirmButton>
+              <ExportKey />
+              <Button size="sm" variant="ghost" onClick={k.lock}>
+                <LockSimple size={14} aria-hidden="true" /> Lock
+              </Button>
+            </div>
+            <p className="text-[11px] text-[var(--color-muted-foreground)]">
+              Hot wallet stored encrypted in this browser only — keep a small balance (0.05 USDC is plenty)
+              and withdraw when done. Lost passphrase = lost wallet.
+            </p>
+          </>
+        )}
+      </div>
+    </Card>
+  )
+}
 
-      {/* ── Live prices ── */}
-      <Card>
-        <CardHeader><CardTitle>Live prices</CardTitle></CardHeader>
+function AddressRow({ address, balance }: { address: string; balance: number | null }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--color-muted)] px-3 py-2.5">
+      <span className="flex items-center gap-2 text-sm">
+        <a className="mono hover:underline" href={addrUrl(address)} target="_blank" rel="noreferrer">{shortAddr(address)}</a>
+        <button
+          className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] cursor-pointer"
+          aria-label="Copy address"
+          onClick={() => { void navigator.clipboard.writeText(address); toast.success('Address copied') }}
+        ><Copy size={14} /></button>
+      </span>
+      <span className={`mono text-sm ${balance !== null && balance < 0.01 ? 'text-[var(--color-destructive)]' : ''}`}>
+        {usdc(balance)}
+      </span>
+    </div>
+  )
+}
+
+function CreateWallet({ busy, act }: { busy: string | null; act: (k: string, fn: () => Promise<unknown>, ok?: string) => Promise<void> }) {
+  const k = useKeeper()
+  const [importing, setImporting] = useState(false)
+  const [pass, setPass] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [key, setKey] = useState('')
+  const mismatch = confirm.length > 0 && pass !== confirm
+  const valid = pass.length >= MIN_PASSPHRASE && pass === confirm && (!importing || key.trim().length > 0)
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={e => {
+        e.preventDefault()
+        if (!valid) return
+        void act('create', () => (importing ? k.importWallet(key, pass) : k.createWallet(pass)),
+          importing ? 'Keeper wallet imported' : 'Keeper wallet created').then(() => setKey(''))
+      }}
+    >
+      <p className="text-sm text-[var(--color-muted-foreground)]">
+        Create a dedicated keeper wallet in this browser. It signs price pushes on its own, so the keeper can run unattended.
+      </p>
+      {importing && (
+        <Field label="Private key" hint="Only import a key used for nothing else.">
+          <input className={inputCls} type="password" autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="0x…" />
+        </Field>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Passphrase" hint={`At least ${MIN_PASSPHRASE} characters`}>
+          <input className={inputCls} type="password" autoComplete="new-password" value={pass} onChange={e => setPass(e.target.value)} />
+        </Field>
+        <Field label="Confirm passphrase" hint={mismatch ? 'Does not match' : undefined}>
+          <input className={inputCls} type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+        </Field>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button size="sm" type="submit" disabled={!valid} loading={busy === 'create'}>
+          <Key size={14} aria-hidden="true" /> {importing ? 'Import wallet' : 'Create keeper wallet'}
+        </Button>
+        <button type="button" className="text-xs text-[var(--color-primary)] underline cursor-pointer" onClick={() => setImporting(v => !v)}>
+          {importing ? 'Generate a new key instead' : 'Import an existing key'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function PassphraseForm({ label, icon, loading, onSubmit }: { label: string; icon: ReactNode; loading: boolean; onSubmit: (p: string) => void }) {
+  const [pass, setPass] = useState('')
+  return (
+    <form className="flex gap-2" onSubmit={e => { e.preventDefault(); if (pass) onSubmit(pass); setPass('') }}>
+      <input className={inputCls} type="password" autoComplete="current-password" placeholder="Passphrase" value={pass} onChange={e => setPass(e.target.value)} />
+      <Button size="sm" type="submit" disabled={!pass} loading={loading}>{icon} {label}</Button>
+    </form>
+  )
+}
+
+function FundRow({ disabled, loading, onFund }: { disabled: boolean; loading: boolean; onFund: (amount: string) => void }) {
+  const [amount, setAmount] = useState('0.05')
+  return (
+    <form className="flex gap-2" onSubmit={e => { e.preventDefault(); onFund(amount) }}>
+      <input className={inputCls} inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} aria-label="USDC amount to fund" />
+      <Button size="sm" type="submit" disabled={disabled} loading={loading} title={disabled ? 'Connect a wallet to fund from' : undefined}>
+        <ArrowDown size={14} aria-hidden="true" /> Fund
+      </Button>
+    </form>
+  )
+}
+
+function ExportKey() {
+  const k = useKeeper()
+  const [open, setOpen] = useState(false)
+  const [revealed, setRevealed] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const close = () => { setOpen(false); setRevealed(null) }
+
+  return (
+    <>
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}><Key size={14} aria-hidden="true" /> Export key</Button>
+      {open && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={close}>
+          <div className="w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <Card className="space-y-3">
+              <h2 className="font-semibold">Export keeper private key</h2>
+              <p className="text-sm text-[var(--color-muted-foreground)]">
+                Anyone with this key controls the keeper wallet. Store it somewhere safe and never share it.
+              </p>
+              {revealed ? (
+                <>
+                  <p className="mono break-all rounded-lg bg-[var(--color-muted)] p-3 text-xs">{revealed}</p>
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => { void navigator.clipboard.writeText(revealed); toast.success('Key copied') }}>
+                      <Copy size={14} aria-hidden="true" /> Copy
+                    </Button>
+                    <Button size="sm" onClick={close}>Done</Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <PassphraseForm
+                    label="Reveal"
+                    icon={<Key size={14} aria-hidden="true" />}
+                    loading={loading}
+                    onSubmit={async p => {
+                      setLoading(true)
+                      try { setRevealed(await k.exportKey(p)) } catch (e) { toast.error(errMsg(e)) } finally { setLoading(false) }
+                    }}
+                  />
+                  <div className="flex justify-end"><Button size="sm" variant="ghost" onClick={close}>Cancel</Button></div>
+                </>
+              )}
+          </Card>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Prices ───────────────────────────────────────────────────────────────────
+
+function PricesCard({ prices, chainTime, now, decision }: { prices: PriceRow[]; chainTime: number | null; now: number; decision: string | null }) {
+  // Chain time advances with the wall clock between refreshes.
+  const t = chainTime === null ? now / 1000 : Math.max(chainTime, now / 1000)
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>Oracle prices</CardTitle></CardHeader>
+      {prices.length === 0 ? (
+        <p className="text-sm text-[var(--color-muted-foreground)]">Loading prices…</p>
+      ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                <th className="text-left text-[10px] text-[var(--color-muted-foreground)] pb-2">Asset</th>
-                <th className="text-right text-[10px] text-[var(--color-muted-foreground)] pb-2">On-chain price</th>
-                <th className="text-right text-[10px] text-[var(--color-muted-foreground)] pb-2">Age</th>
-                <th className="text-right text-[10px] text-[var(--color-muted-foreground)] pb-2">Status</th>
+              <tr className="text-left text-xs text-[var(--color-muted-foreground)]">
+                <th className="pb-2 font-medium">Asset</th>
+                <th className="pb-2 font-medium text-right">On-chain</th>
+                <th className="pb-2 font-medium text-right">Age</th>
+                <th className="pb-2 font-medium text-right">Pyth now</th>
+                <th className="pb-2 font-medium text-right">Status</th>
               </tr>
             </thead>
             <tbody>
-              {Object.entries(TOKENS).map(([sym, token]) => {
-                const event = events.find(e => e.type === 'price' && e.asset === token.address) as KeeperEvent | undefined
+              {prices.map(r => {
+                const age = r.onchainPublishTime === null ? null : t - r.onchainPublishTime
+                const pythAge = r.pythPublishTime === null ? null : t - r.pythPublishTime
+                const stale = age === null || age >= r.maxAge
+                const pythIdle = pythAge !== null && pythAge >= r.maxAge
                 return (
-                  <tr key={sym} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="py-2 mono">{sym}</td>
-                    <td className="py-2 text-right mono">{event?.priceUsd?.toFixed(2) ?? '—'}</td>
-                    <td className="py-2 text-right mono">{event ? msToSecs(event.ageSec ? event.ageSec * 1000 : null) : '—'}</td>
+                  <tr key={r.symbol} className="border-t border-[var(--color-border)]">
+                    <td className="py-2 font-medium">{r.symbol}</td>
+                    <td className="py-2 text-right mono">{fmtPrice(r.onchainPrice)}</td>
+                    <td className="py-2 text-right mono">{ago(age)}</td>
+                    <td className="py-2 text-right mono">{fmtPrice(r.pythPrice)}</td>
                     <td className="py-2 text-right">
-                      {event ? <Pill tone={event.fresh ? 'success' : 'warning'}>{event.fresh ? 'Fresh' : 'Stale'}</Pill> : <Pill tone="muted">—</Pill>}
+                      {!stale ? <Pill tone="success">Fresh</Pill>
+                        : pythIdle ? <Pill tone="muted">Market closed</Pill>
+                        : <Pill tone="danger">Stale</Pill>}
                     </td>
                   </tr>
                 )
@@ -338,256 +405,144 @@ export default function Keeper() {
             </tbody>
           </table>
         </div>
-      </Card>
-
-      {/* ── Stats ── */}
-      <div className="grid md:grid-cols-2 gap-3">
-        <Card>
-          <CardHeader><CardTitle>Session stats</CardTitle></CardHeader>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Borrowers tracked</span>
-              <span className="mono">{state.borrowersTracked}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Unhealthy (HF &lt; 1)</span>
-              <span className="mono text-[var(--color-destructive)]">{state.unhealthyCount}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Last cycle</span>
-              <span className="mono">{msToSecs(state.lastCycleMs)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Next cycle</span>
-              <span className="mono">{state.nextCycleMs ? msToSecs(state.nextCycleMs - Date.now()) : '—'}</span>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Budget guardrails</CardTitle></CardHeader>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Session budget</span>
-              <span className="mono">{fmtUsd(settings.sessionBudgetUsdc)} USDC</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Spent this session</span>
-              <span className="mono">{fmtUsd(state.gasSpentUsdc)} USDC</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[var(--color-muted-foreground)]">Min balance</span>
-              <span className="mono">{fmtUsd(settings.minBalanceUsdc)} USDC</span>
-            </div>
-            <div className="w-full bg-[var(--color-muted)] rounded h-1.5">
-              <div
-                className="h-full bg-[var(--color-primary)] rounded"
-                style={{ width: Math.min((state.gasSpentUsdc / settings.sessionBudgetUsdc) * 100, 100) + '%' }}
-              />
-            </div>
-          </div>
-          <p className="text-[10px] text-[var(--color-muted-foreground)]">
-            Auto-stops when session budget is reached or balance drops below minimum.
-          </p>
-        </Card>
-      </div>
-
-      {/* ── Settings ── */}
-      <Card>
-        <CardHeader><CardTitle>Settings</CardTitle></CardHeader>
-        <div className="grid md:grid-cols-3 gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Interval</span>
-            <div className="flex gap-1">
-              <input
-                type="number"
-                min="30"
-                value={settings.intervalSec}
-                onChange={e => updateSettings({ intervalSec: Math.max(30, Number(e.target.value || 30)) })}
-                className="w-16 mono text-xs rounded border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-              />
-              <span className="text-[10px] text-[var(--color-muted-foreground)]">s</span>
-            </div>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Gas saver</span>
-            <Button size="sm" variant={settings.gasSaver ? 'primary' : 'secondary'} onClick={() => updateSettings({ gasSaver: !settings.gasSaver })}>
-              {settings.gasSaver ? 'On' : 'Off'}
-            </Button>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Liquidations</span>
-            <Button size="sm" variant={settings.liquidationsOn ? 'primary' : 'secondary'} onClick={() => updateSettings({ liquidationsOn: !settings.liquidationsOn })}>
-              {settings.liquidationsOn ? 'On' : 'Off'}
-            </Button>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Dry-run</span>
-            <Button size="sm" variant={settings.dryRun ? 'primary' : 'secondary'} onClick={() => updateSettings({ dryRun: !settings.dryRun })}>
-              {settings.dryRun ? 'On' : 'Off'}
-            </Button>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Session budget</span>
-            <input
-              type="number"
-              min="0"
-              value={autoStopBudget}
-              onChange={e => setAutoStopBudget(e.target.value)}
-              className="w-20 mono text-xs rounded border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[var(--color-muted-foreground)]">Min balance</span>
-            <input
-              type="number"
-              min="0"
-              value={settings.minBalanceUsdc}
-              onChange={e => updateSettings({ minBalanceUsdc: Number(e.target.value || 0) })}
-              className="w-20 mono text-xs rounded border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-        </div>
-        <div className="mt-4 md:mt-0">
-          <Button onClick={() => updateSettings({ sessionBudgetUsdc: Number(autoStopBudget) || 0 })} size="sm">
-            Apply budget
-          </Button>
-        </div>
-      </Card>
-
-      {/* ── Activity log ── */}
-      <Card>
-        <CardHeader><CardTitle>Activity log</CardTitle></CardHeader>
-        <div className="flex justify-between items-end mb-2">
-          <span className="text-[10px] text-[var(--color-muted-foreground)]">Newest first — tx hashes link to the explorer</span>
-          <Button size="sm" variant="secondary" onClick={() => {
-            // clear handled by provider; placeholder
-          }}>Clear</Button>
-        </div>
-        <div className="max-h-96 overflow-y-auto space-y-1">
-          {events.length === 0 ? (
-            <p className="text-[11px] text-[var(--color-muted-foreground)] text-center py-4">No activity yet. Run a cycle to see events.</p>
-          ) : (
-            events.map((ev, i) => (
-              <div key={i} className="flex items-start gap-2 px-2 py-1 text-xs border-l-2">
-                <span className={`w-2.5 rounded ${levelTone(ev.type)}`} />
-                <div className="flex-1">
-                  <div className="flex justify-between">
-                    <span className={`mono font-medium ${evTextColor(ev.type)}`}>{ev.type === 'tx' ? 'TX' : ev.type === 'error' ? 'ERR' : ev.type === 'warning' ? 'WARN' : 'INFO'}</span>
-                    <span className="text-[var(--color-muted-foreground)]">{new Date().toLocaleTimeString()}</span>
-                  </div>
-                  <div className="mono text-[10px]">
-                    {ev.type === 'tx' && ev.hash ? (
-                      <>
-                        {ev.action} {ev.costUsdc !== null ? `· ${fmtUsd(ev.costUsdc)} USDC` : ''} ·{' '}
-                        <a href={addrUrl(ev.hash)} target="_blank" rel="noopener noreferrer" className="text-[var(--color-primary)] hover:underline">
-                          {shortAddr(ev.hash)}
-                        </a>
-                        {ev.status === 'confirmed' ? ' ✓' : ev.status === 'failed' ? ' ✗' : ' ⏳'}
-                      </>
-                    ) : (ev.type === 'warning' || ev.type === 'error' ? (ev as { message?: string }).message : "—")}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </Card>
-
-      {/* Export confirm modal */}
-      {showExportConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={(e) => e.stopPropagation()}>
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <Card className="w-full max-w-sm bg-[var(--color-background)] border border-[var(--color-border)]">
-              <CardHeader><CardTitle>Export keeper key</CardTitle></CardHeader>
-              <div className="space-y-3">
-                <p className="text-[11px] text-[var(--color-muted-foreground)]">
-                  Re-enter your passphrase to reveal the private key. <strong className="text-[var(--color-destructive)]">This exposes your key — copy it somewhere safe.</strong>
-                </p>
-                <input
-                  type="password"
-                  placeholder="Passphrase"
-                  value={exportPassphrase}
-                  onChange={e => setExportPassphrase(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm mono text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setShowExportConfirm(false)}>Cancel</Button>
-                  <Button
-                    onClick={async () => {
-                      const key = await exportWallet(exportPassphrase)
-                      if (key) {
-                        navigator.clipboard.writeText(key)
-                        toast.success('Key copied to clipboard')
-                      } else {
-                        toast.error('Wrong passphrase')
-                      }
-                      setShowExportConfirm(false)
-                    }}
-                    size="sm"
-                  >
-                    Reveal
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        </div>
       )}
-
-      {/* Forget confirm modal */}
-      {showForgetConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={(e) => e.stopPropagation()}>
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <Card className="w-full max-w-sm bg-[var(--color-background)] border border-[var(--color-border)]">
-              <CardHeader><CardTitle>Forget keeper wallet</CardTitle></CardHeader>
-              <div className="space-y-3">
-                <p className="text-[11px] text-[var(--color-muted-foreground)]">
-                  This deletes the wallet from this browser. <strong className="text-[var(--color-destructive)]">Any funds left on the keeper address will be inaccessible unless you have exported the key.</strong>
-                </p>
-                <input
-                  type="password"
-                  placeholder="Passphrase"
-                  value={forgetPassphrase}
-                  onChange={e => setForgetPassphrase(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-sm mono text-[var(--color-foreground)] focus:outline-none focus:border-[var(--color-primary)]"
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setShowForgetConfirm(false)}>Cancel</Button>
-                  <Button
-                    onClick={async () => {
-                      await forgetWallet()
-                      setShowForgetConfirm(false)
-                      toast.success('Wallet forgotten')
-                    }}
-                    size="sm"
-                    variant="danger"
-                  >
-                    Forget
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        </div>
-      )}
-    </div>
+      <p className="mt-3 text-[11px] text-[var(--color-muted-foreground)]">
+        Prices older than {prices[0]?.maxAge ?? 300}s are stale: borrows and liquidations touching that asset revert until the keeper pushes.
+        {decision && <> Last decision: <span className="text-[var(--color-foreground)]">{decision}</span>.</>}
+      </p>
+    </Card>
   )
 }
 
-function levelTone(type: string): string {
-  switch (type) {
-    case 'error': return 'bg-[var(--color-destructive)]'
-    case 'warning': return 'bg-[var(--color-warning)]'
-    case 'tx': return 'bg-[var(--color-primary)]'
-    default: return 'bg-[var(--color-success)]'
-  }
+function fmtPrice(n: number | null) {
+  if (n === null) return '—'
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: n < 10 ? 4 : 2 })}`
 }
 
-function evTextColor(type: string): string {
-  switch (type) {
-    case 'error': return 'text-[var(--color-destructive)]'
-    case 'warning': return 'text-[var(--color-warning)]'
-    case 'tx': return 'text-[var(--color-primary)]'
-    default: return 'text-[var(--color-foreground)]'
-  }
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+function NumberSetting({ label, hint, value, step, onCommit }: {
+  label: string; hint: string; value: number; step: string; onCommit: (v: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        className={inputCls}
+        type="number"
+        min="0"
+        step={step}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { const v = Number(draft); if (Number.isFinite(v)) onCommit(v); else setDraft(String(value)) }}
+      />
+    </Field>
+  )
+}
+
+function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer">
+      <input type="checkbox" className="mt-1 accent-[var(--color-primary)]" checked={checked} onChange={e => onChange(e.target.checked)} />
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-[11px] text-[var(--color-muted-foreground)]">{hint}</span>
+      </span>
+    </label>
+  )
+}
+
+function SettingsCard({ settings: s, onChange }: { settings: KeeperSettings; onChange: (p: Partial<KeeperSettings>) => void }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Settings</CardTitle></CardHeader>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <NumberSetting label="Interval (seconds)" hint="Minimum 30" step="1" value={s.intervalSec} onCommit={v => onChange({ intervalSec: v })} />
+        <NumberSetting label="Refresh margin (seconds)" hint="Push when a price has this long left" step="1" value={s.refreshMarginSec} onCommit={v => onChange({ refreshMarginSec: v })} />
+        <NumberSetting label="Session budget (USDC)" hint="Auto-stop at this much gas; 0 = no limit" step="0.01" value={s.sessionBudgetUsdc} onCommit={v => onChange({ sessionBudgetUsdc: v })} />
+        <NumberSetting label="Minimum balance (USDC)" hint="Auto-stop below this" step="0.01" value={s.minBalanceUsdc} onCommit={v => onChange({ minBalanceUsdc: v })} />
+      </div>
+      <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        <Toggle label="Gas saver" hint="Only push prices that are about to go stale, or when a loan is near liquidation" checked={s.gasSaver} onChange={v => onChange({ gasSaver: v })} />
+        <Toggle label="Liquidations" hint="Repay unhealthy loans with the keeper's own USDC/EURC and receive collateral" checked={s.liquidationsOn} onChange={v => onChange({ liquidationsOn: v })} />
+        <Toggle label="Dry run" hint="Simulate everything, send nothing" checked={s.dryRun} onChange={v => onChange({ dryRun: v })} />
+      </div>
+    </Card>
+  )
+}
+
+// ── Log ──────────────────────────────────────────────────────────────────────
+
+const LEVEL: Record<LogEntry['level'], { label: string; tone: 'success' | 'warning' | 'danger' | 'muted' }> = {
+  info: { label: 'Info', tone: 'muted' },
+  warn: { label: 'Warn', tone: 'warning' },
+  error: { label: 'Error', tone: 'danger' },
+  tx: { label: 'Tx', tone: 'success' },
+}
+
+function LogCard({ logs, onClear }: { logs: LogEntry[]; onClear: () => void }) {
+  return (
+    <Card>
+      <CardHeader className="flex items-center justify-between">
+        <CardTitle>Activity</CardTitle>
+        <Button size="sm" variant="ghost" onClick={onClear} disabled={logs.length === 0}>Clear</Button>
+      </CardHeader>
+      {logs.length === 0 ? (
+        <p className="py-6 text-center text-sm text-[var(--color-muted-foreground)]">No activity yet. Press Run once to try a cycle.</p>
+      ) : (
+        <ul className="max-h-96 space-y-1 overflow-y-auto">
+          {logs.map(l => (
+            <li key={l.id} className="flex items-start gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-[var(--color-muted)]">
+              <span className="mono w-16 shrink-0 pt-0.5 text-[11px] text-[var(--color-muted-foreground)]">
+                {new Date(l.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+              <span className="w-12 shrink-0"><Pill tone={LEVEL[l.level].tone}>{LEVEL[l.level].label}</Pill></span>
+              <span className="min-w-0 flex-1 break-words">
+                {l.message}
+                {l.costUsdc !== undefined && <span className="mono text-[var(--color-muted-foreground)]"> · {l.costUsdc.toFixed(5)} USDC</span>}
+                {l.txHash && (
+                  <a className="ml-2 inline-flex items-center gap-1 text-[var(--color-primary)] hover:underline" href={txUrl(l.txHash)} target="_blank" rel="noreferrer">
+                    {shortAddr(l.txHash)} <ArrowSquareOut size={12} aria-hidden="true" />
+                  </a>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+// ── Help ─────────────────────────────────────────────────────────────────────
+
+function HowTo() {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Try the keeper</CardTitle></CardHeader>
+      <ol className="list-decimal space-y-1.5 pl-5 text-sm text-[var(--color-muted-foreground)]">
+        <li>Connect any wallet on {NETWORK_NAME} (top right). No admin role needed.</li>
+        <li>Create a browser keeper wallet with a passphrase.</li>
+        <li>Fund it with about 0.05 USDC from your connected wallet.</li>
+        <li>Press <strong>Run once</strong>: the keeper fetches signed Pyth prices and pushes them if they're due. Follow the tx link in Activity.</li>
+        <li>Press <strong>Start</strong> to keep it running every minute, then <strong>Stop</strong>. The session budget caps what it can spend.</li>
+        <li>When done, <strong>Withdraw all</strong> returns the remaining USDC to your wallet.</li>
+      </ol>
+    </Card>
+  )
+}
+
+function Notice({ tone, children }: { tone: 'warning' | 'danger' | 'info'; children: ReactNode }) {
+  const color = tone === 'danger' ? 'var(--color-destructive)' : tone === 'warning' ? 'var(--color-warning)' : 'var(--color-primary)'
+  const Icon = tone === 'info' ? Info : Warning
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm"
+      style={{ borderColor: `color-mix(in srgb, ${color} 35%, transparent)`, background: `color-mix(in srgb, ${color} 8%, transparent)` }}
+    >
+      <Icon size={16} className="mt-0.5 shrink-0" style={{ color }} aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  )
 }
