@@ -37,7 +37,7 @@ ARC_RPC_URLS.forEach(url => registerChain(activeChain.id, url))
 const ARC_MAINNET_ID = arc.id         // 5042
 const ARC_TESTNET_ID = arcTestnet.id  // 5042002
 
-const arcTransport = fallback(ARC_RPC_URLS.map(url => http(url)))
+export const arcTransport = fallback(ARC_RPC_URLS.map(url => http(url)))
 
 export const config = createConfig({
   chains: [activeChain, mainnet], // mainnet needed for ENS resolution

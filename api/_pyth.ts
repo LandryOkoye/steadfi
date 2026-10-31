@@ -1,119 +1,97 @@
 /**
- * Shared Pyth Pro (Lazer) price proxy — used by api/pyth-latest.ts (Vercel)
- * and by vite dev via vite.config.ts.
+ * Pyth Pro (Lazer) price proxy core, shared by api/pyth-latest.ts (Vercel) and
+ * the dev-server plugin in vite.config.ts. Files starting with "_" in api/ are
+ * not exposed as routes.
  *
- * Keeps PYTH_API_KEY server-side: the browser never sees it.
- *
- * POST only. Accepts { feedIds: number[] } (allowlist: 1, 2, 327). Builds the
- * Lazer request body server-side (fixed properties/formats/channel) and
- * forwards it to https://pyth-lazer.dourolabs.app/v1/latest_price.
- *
- * Returns { evmPayload, prices, fetchedAt } — never the upstream key or raw
- * headers. 2s in-memory cache for identical requests; Cache-Control: no-store.
+ * Keeps PYTH_API_KEY server-side: the browser never sees it. The request body
+ * sent upstream is fixed here; callers only choose feeds from an allowlist.
+ * No CORS headers, so other sites cannot use this endpoint from a browser.
  */
 
-import { loadEnv } from 'vite'
-import { buildPythRequest } from '../src/lib/pythLatest'
-
+const LAZER_URL = 'https://pyth-lazer.dourolabs.app/v1/latest_price'
+const ALLOWED_FEED_IDS = new Set([1, 2, 327]) // BTC/USD, ETH/USD, EUR/USD
 const CACHE_TTL_MS = 2_000
+const TIMEOUT_MS = 10_000
 
-type Cached = { value: ResponsePayload; expires: number }
-const cache = new Map<string, Cached>()
+export interface PythFeed {
+  feedId: number
+  price: string
+  exponent: number
+  /** Unix seconds of the feed's last upstream update. */
+  publishTime: number
+}
 
-export interface ResponsePayload {
-  evmPayload: string
-  prices: { feedId: number; price: string; exponent: number; confidence: string; publishTime: number }[]
+export interface PythLatest {
+  /** Signed payload for PythOracleAdapter.updatePrices(bytes). */
+  evmPayload: `0x${string}`
+  feeds: PythFeed[]
   fetchedAt: number
 }
 
-interface LazerError extends Error {
-  status?: number
+export class ProxyError extends Error {
+  constructor(message: string, public status: number) { super(message) }
 }
 
-function isProd() {
-  return typeof process !== 'undefined' && process.env.NODE_ENV === 'production'
-}
+const cache = new Map<string, { value: PythLatest; expires: number }>()
 
-function getApiKey(): string | undefined {
-  // Vercel runtime: PYTH_API_KEY is a server env var.
-  // Vite dev: loadEnv reads .env (PYTH_API_KEY is NOT VITE_*, so only the
-  // dev server process sees it — never shipped to the browser).
-  if (typeof process !== 'undefined' && process.env.PYTH_API_KEY) return process.env.PYTH_API_KEY
-  try {
-    const env = loadEnv(isProd() ? 'production' : 'development', process.cwd(), '')
-    if (env.PYTH_API_KEY) return env.PYTH_API_KEY
-  } catch {
-    // loadEnv may not exist in plain Node; ignore.
+export function parseFeedIds(body: unknown): number[] {
+  const ids = (body as { feedIds?: unknown } | null)?.feedIds
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > ALLOWED_FEED_IDS.size) {
+    throw new ProxyError('feedIds must be a non-empty array', 400)
   }
-  return undefined
-}
-
-function makeErr(message: string, status: number): LazerError {
-  const err = new Error(message) as LazerError
-  err.status = status
-  return err
-}
-
-export async function handlePythLatest(body: unknown): Promise<ResponsePayload> {
-  const parsed = body as { feedIds?: unknown }
-  if (!Array.isArray(parsed.feedIds) || parsed.feedIds.length === 0) {
-    throw makeErr('feedIds must be a non-empty array', 400)
+  for (const id of ids) {
+    if (typeof id !== 'number' || !ALLOWED_FEED_IDS.has(id)) {
+      throw new ProxyError(`feedId ${String(id)} not allowed`, 400)
+    }
   }
-  const feedIds = parsed.feedIds as number[]
-  // buildPythRequest re-validates the allowlist
-  buildPythRequest(feedIds)
+  return [...new Set(ids as number[])].sort((a, b) => a - b)
+}
 
-  const cacheKey = JSON.stringify(feedIds)
-  const now = Date.now()
+export async function fetchPythLatest(body: unknown, apiKey: string | undefined): Promise<PythLatest> {
+  const feedIds = parseFeedIds(body)
+  if (!apiKey) throw new ProxyError('Price service not configured (PYTH_API_KEY missing on the server)', 503)
+
+  const cacheKey = feedIds.join(',')
   const hit = cache.get(cacheKey)
-  if (hit && hit.expires > now) return hit.value
+  if (hit && hit.expires > Date.now()) return hit.value
 
-  const apiKey = getApiKey()
-  if (!apiKey) {
-    throw makeErr('Pyth Pro API key not configured on server', 502)
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
   let res: Response
   try {
-    res = await fetch('https://pyth-lazer.dourolabs.app/v1/latest_price', {
+    res = await fetch(LAZER_URL, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildPythRequest(feedIds)),
-      signal: controller.signal,
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        priceFeedIds: feedIds,
+        properties: ['price', 'exponent', 'confidence', 'feedUpdateTimestamp'],
+        formats: ['evm'],
+        jsonBinaryEncoding: 'hex',
+        channel: 'real_time',
+        parsed: true,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     })
-  } finally {
-    clearTimeout(timeout)
+  } catch {
+    throw new ProxyError('Price service unreachable', 502)
   }
+  if (!res.ok) throw new ProxyError(`Price service returned ${res.status}`, 502)
 
-  if (!res.ok) {
-    throw makeErr(`Pyth Pro upstream returned ${res.status}`, 502)
+  const data = await res.json() as {
+    evm?: { data?: string }
+    parsed?: { priceFeeds?: { priceFeedId: number; price?: string; exponent?: number; feedUpdateTimestamp?: number }[] }
   }
-
-  const data = await res.json() as { evm?: { data?: unknown } }
   const evm = data.evm?.data
-  if (typeof evm !== 'string') {
-    throw makeErr('Pyth Pro response had no evm payload', 502)
-  }
+  if (typeof evm !== 'string' || evm.length === 0) throw new ProxyError('Price service returned no payload', 502)
 
-  const payload: ResponsePayload = {
-    evmPayload: evm.startsWith('0x') ? evm : `0x${evm}`,
-    prices: [],
-    fetchedAt: now,
+  const value: PythLatest = {
+    evmPayload: (evm.startsWith('0x') ? evm : `0x${evm}`) as `0x${string}`,
+    feeds: (data.parsed?.priceFeeds ?? []).map(f => ({
+      feedId: f.priceFeedId,
+      price: f.price ?? '0',
+      exponent: f.exponent ?? 0,
+      publishTime: Math.floor((f.feedUpdateTimestamp ?? 0) / 1_000_000),
+    })),
+    fetchedAt: Date.now(),
   }
-  cache.set(cacheKey, { value: payload, expires: now + CACHE_TTL_MS })
-  return payload
-}
-
-export function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Cache-Control': 'no-store',
-  }
+  cache.set(cacheKey, { value, expires: Date.now() + CACHE_TTL_MS })
+  return value
 }

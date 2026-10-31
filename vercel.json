@@ -6,7 +6,6 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/arc-rpc", "destination": "https://rpc.mainnet.arc.io/" },
-    { "source": "/api/pyth-latest", "destination": "/api/pyth-latest" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [

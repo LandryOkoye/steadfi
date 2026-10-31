@@ -1,36 +1,39 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
-import { handlePythLatest, corsHeaders } from './api/_pyth'
+import { fetchPythLatest, ProxyError } from './api/_pyth'
 
-const pythProxyPlugin = () => ({
+// Dev-only stand-in for the Vercel function api/pyth-latest.ts. PYTH_API_KEY is
+// read from .env on the dev server and never reaches the browser bundle.
+const pythProxyPlugin = (apiKey: string | undefined): Plugin => ({
   name: 'steadfi-pyth-proxy',
-  configureServer(server: any) {
-    server.middlewares.use((req: any, res: any, next: () => void) => {
-      if (req.url !== '/api/pyth-latest' || req.method !== 'POST') return next()
-      let body = ''
-      req.on('data', (chunk: string) => { body += chunk })
+  configureServer(server) {
+    server.middlewares.use('/api/pyth-latest', (req, res) => {
+      const send = (status: number, body: unknown) => {
+        res.statusCode = status
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Cache-Control', 'no-store')
+        res.end(JSON.stringify(body))
+      }
+      if (req.method !== 'POST') return send(405, { error: 'Method not allowed' })
+      let raw = ''
+      req.on('data', chunk => { raw += chunk })
       req.on('end', async () => {
         try {
-          const parsed = JSON.parse(body || '{}')
-          const payload = await handlePythLatest(parsed)
-          for (const [k, v] of Object.entries(corsHeaders())) res.setHeader(k, v)
-          res.statusCode = 200
-          res.end(JSON.stringify(payload))
-        } catch (err: unknown) {
-          const status = (err as { status?: number }).status ?? 502
-          for (const [k, v] of Object.entries(corsHeaders())) res.setHeader(k, v)
-          res.statusCode = status
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'upstream error' }))
+          send(200, await fetchPythLatest(JSON.parse(raw || '{}'), apiKey))
+        } catch (err) {
+          send(err instanceof ProxyError ? err.status : 400, {
+            error: err instanceof ProxyError ? err.message : 'Bad request',
+          })
         }
       })
     })
   },
 })
 
-export default defineConfig({
-  plugins: [react(), nodePolyfills(), pythProxyPlugin()],
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), nodePolyfills(), pythProxyPlugin(loadEnv(mode, process.cwd(), '').PYTH_API_KEY)],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -77,4 +80,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
